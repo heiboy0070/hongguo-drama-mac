@@ -464,3 +464,6 @@
 .dm-pagination nav { display: flex; align-items: center; gap: 10px; }
 .dm-container .alert .btn { margin-left: 12px; }
 @media (max-width: 900px) { .dm-header { flex-direction: column; gap: 12px; } .dm-stats { padding-top: 0; } .merge-inline { margin-left: 0; } }
+
+.dm-selection-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.dm-merge-hint { margin-top: 12px; }

@@ -210,6 +210,8 @@ function DownloadManager({ onNavigate, active = true }) {
   };
 
   const clearSelection = () => setSelected(new Set());
+  const selectAll = () => setSelected(new Set(tasks.map((task) => task.id)));
+  const allSelected = tasks.length > 0 && tasks.every((task) => selected.has(task.id));
 
   const fmtSize = (b) => {
     if (!b || b <= 0) return '0 B';
@@ -481,7 +483,7 @@ function DownloadManager({ onNavigate, active = true }) {
             </select>
             <button className="btn btn-outline" onClick={() => setMergeAsk(true)} disabled={merging} title="把该剧已下载的分集合并成单个 mp4">
               <Layers size={15} />
-              {merging ? '合并中...' : '合并导出'}
+              {merging ? '合并中...' : '合并整部剧'}
             </button>
           </div>
         )}
@@ -492,6 +494,8 @@ function DownloadManager({ onNavigate, active = true }) {
           </button>
         )}
       </div>
+
+      {seriesList.length > 0 && <p className="settings-hint dm-merge-hint">选择剧名后点“合并整部剧”，导出该剧全部已下载分集，无需勾选任务。</p>}
 
       {/* 合并任务 */}
       {mergeTasks.length > 0 && (
@@ -584,7 +588,13 @@ function DownloadManager({ onNavigate, active = true }) {
 
       {loadError && <div className="alert alert-error" role="alert">{loadError}<button className="btn btn-outline btn-sm" onClick={refresh}>重新加载</button></div>}
       {tasks.length > 0 && <div className="dm-pagination">
+        <div className="dm-selection-summary">
+          <button className="btn btn-outline btn-sm" onClick={allSelected ? clearSelection : selectAll}
+            title={allSelected ? '取消所有分页中的选择' : `选中全部 ${tasks.length} 项，包含其他分页`}>
+            <CheckSquare size={15} />{allSelected ? '取消全选' : '全选'}
+          </button>
         <span>共 {tasks.length} 项 · 当前 {(currentPage - 1) * PAGE_SIZE + 1}-{Math.min(currentPage * PAGE_SIZE, tasks.length)} 项{selected.size > 0 ? ` · 已选 ${selected.size} 项（跨页保留）` : ''}</span>
+        </div>
         <nav aria-label="下载任务分页">
           <button className="btn btn-outline btn-sm" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button>
           <span>第 {currentPage} / {pageCount} 页</span>
@@ -678,10 +688,10 @@ function DownloadManager({ onNavigate, active = true }) {
           <div className="player-confirm" role="dialog" aria-modal="true" aria-label={confirmAsk ? confirmAsk.title : '合并导出'} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
             <div className="player-confirm-title" style={{ color: 'var(--accent)' }}>
               <Layers size={17} />
-              合并导出全集
+              合并整部剧
             </div>
             <div className="player-confirm-msg">
-              <p>把该剧已下载的分集合并为一个 mp4。</p>
+              <p>将《{seriesList.find((series) => String(series.series_id) === mergeSeriesId)?.series_title || '所选短剧'}》的全部已下载分集合并为一个 mp4。未下载的分集不会自动补齐。</p>
               <p><b>智能快速合并</b>：格式一致时无损合并；不一致时只处理必要的音视频，耗时取决于总时长。</p>
               <p><b>兼容合并</b>：导出 H.264/AAC，已经兼容的分集无需重复转换。两种方式都保留原文件。</p>
             </div>

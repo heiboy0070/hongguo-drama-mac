@@ -90,6 +90,36 @@ function mount(file, api, props = {}) {
     second.resolve(ok(detail('B'))); await ui.flush(); first.resolve(ok(detail('A'))); await ui.flush();
     assert.ok(ui.text().includes('《B》')); assert.ok(!ui.text().includes('《A》')); ui.unmount();
   });
+  await test('download play opens the selected series in the library without downloading', async () => {
+    for (const id of ['123', 'xifan:test:123', 'hema:123']) {
+      let navigate, downloaded = false, played;
+      const app = mount('../App', { getAppInfo: async () => ({}), onNavigate: fn => { navigate = fn; return () => {}; } });
+      const ui = mount('HongguoDownload', { playSeries: async p => { played = p; navigate({ page: 'player', payload: p }); return { success: true }; }, hongguoDownloadBatch: async () => { downloaded = true; } });
+      const data = detail(id); data.episodes[0].locked = true;
+      ui.find(n => n.props.onSelectSeries).props.onSelectSeries(data); ui.render();
+      const button = ui.button('立即播放'); assert.ok(button, 'selected-series header must expose play');
+      await button.props.onClick(); await ui.flush(); app.render();
+      assert.equal(played.seriesId, id); assert.equal(played.vidIndex, 2); assert.equal(downloaded, false);
+      const player = app.find(n => n.props.target?.seriesId === id); assert.ok(player); assert.equal(player.props.active, true); assert.equal(player.props.target.vidIndex, 2);
+      ui.unmount(); app.unmount();
+    }
+  });
+  await test('download play disables fully locked series', async () => {
+    let called = false; const data = detail('hema:123'); data.episodes.forEach(ep => { ep.locked = true; });
+    const ui = mount('HongguoDownload', { playSeries: async () => { called = true; } });
+    ui.find(n => n.props.onSelectSeries).props.onSelectSeries(data); ui.render();
+    const button = ui.button('立即播放'); assert.ok(button); assert.equal(button.props.disabled, true);
+    await button.props.onClick(); assert.equal(called, false); ui.unmount();
+  });
+  await test('download play prevents duplicate requests and exposes failures', async () => {
+    const pending = deferred(); let calls = 0;
+    const ui = mount('HongguoDownload', { playSeries: () => { calls++; return pending.promise; } });
+    ui.find(n => n.props.onSelectSeries).props.onSelectSeries(detail('123')); ui.render();
+    const button = ui.button('立即播放'); assert.ok(button); button.props.onClick(); button.props.onClick(); ui.render();
+    assert.equal(calls, 1); assert.ok(ui.find(n => n.type === 'button' && n.props.disabled && n.children.some(c => c?.children?.includes('正在打开…'))));
+    pending.resolve({ success: false, error: '打开失败示例' }); await ui.flush();
+    assert.ok(ui.text().includes('打开失败示例')); assert.equal(ui.button('立即播放').props.disabled, false); ui.unmount();
+  });
   await test('download ignores search selection after leaving its search panel', async () => {
     const ui = mount('HongguoDownload', { hongguoResolve: async () => ok(detail('B')) });
     const oldSearchResult = ui.find(n => n.props.onSelectSeries).props.onSelectSeries;

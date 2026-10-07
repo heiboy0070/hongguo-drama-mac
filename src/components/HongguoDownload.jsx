@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './HongguoDownload.css';
-import { Film, Download, CheckSquare, Square, RefreshCw, Folder, Link2, Search } from './icons';
+import { Film, Download, CheckSquare, Square, RefreshCw, Folder, Link2, Search, Play } from './icons';
 import SearchPanel from './SearchPanel';
 import { isSubmitKey, parseEpisodeRange } from './episodeRange';
 
@@ -17,6 +17,9 @@ function HongguoDownload({ onNavigate, active = true }) {
   const [selectedVids, setSelectedVids] = useState(new Set());
   const [rangeInput, setRangeInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [openingPlayer, setOpeningPlayer] = useState(false);
+  const playPending = useRef(false);
+  const firstPlayable = seriesData?.episodes.find((ep) => !ep.locked);
   const resolveRequest = useRef(0);
   const pendingResolve = useRef(null);
   const searchVersion = resolveRequest.current;
@@ -41,7 +44,7 @@ function HongguoDownload({ onNavigate, active = true }) {
     setTab('input');
     setSeriesData(data);
     setSelectedVids(new Set(data.episodes.filter((ep) => !ep.locked).map((ep) => ep.vid)));
-    setSuccessMsg(`已选中《${data.series_title}》共 ${data.total} 集，可直接提交下载`);
+    setSuccessMsg(`已选中《${data.series_title}》共 ${data.total} 集，可直接播放或提交下载`);
     document.querySelector('.main-content:not([hidden])')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -141,6 +144,23 @@ function HongguoDownload({ onNavigate, active = true }) {
       setSelectedVids(new Set(seriesData.episodes.filter((ep) => !ep.locked && nums.has(ep.vid_index)).map((ep) => ep.vid)));
       setErrorMsg('');
     } catch (error) { setErrorMsg(error.message); }
+  };
+
+  const handlePlay = async () => {
+    if (!seriesData || !firstPlayable || playPending.current) return;
+    const request = resolveRequest.current;
+    playPending.current = true;
+    setOpeningPlayer(true);
+    setErrorMsg('');
+    try {
+      const res = await window.electronAPI.playSeries({ seriesId: seriesData.series_id, vidIndex: firstPlayable.vid_index });
+      if (!res?.success && request === resolveRequest.current) setErrorMsg(res?.error || '打开播放器失败，请重试');
+    } catch (error) {
+      if (request === resolveRequest.current) setErrorMsg('打开播放器失败: ' + error.message);
+    } finally {
+      playPending.current = false;
+      setOpeningPlayer(false);
+    }
   };
 
   // 提交批量下载
@@ -278,6 +298,12 @@ function HongguoDownload({ onNavigate, active = true }) {
             </div>
 
             <div className="batch-action-bar">
+              <button className="btn btn-outline" onClick={handlePlay}
+                disabled={openingPlayer || !firstPlayable}
+                title={firstPlayable ? '在我的剧库播放，未下载的分集会在线播放' : '当前剧集没有可播放的分集'}>
+                {openingPlayer ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
+                <span>{openingPlayer ? '正在打开…' : '立即播放'}</span>
+              </button>
               <button
                 className="btn btn-primary"
                 onClick={handleBatchDownload}

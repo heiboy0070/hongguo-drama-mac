@@ -44,7 +44,7 @@ const runningMerge = () => ({ id: 'm', status: 'running', total: 2, done: 0, pro
 
 (async () => {
   let failures = 0, passed = 0;
-  const test = async (name, fn) => { if (process.argv[2] && !name.includes(process.argv[2])) return; try { await fn(); passed++; } catch (error) { failures++; console.error(`FAIL ${name}: ${error.stack}`); } };
+  const test = async (name, fn) => { if (process.argv[2] && !new RegExp(process.argv[2]).test(name)) return; try { await fn(); passed++; } catch (error) { failures++; console.error(`FAIL ${name}: ${error.stack}`); } };
   await test('one initial snapshot and no polling or focus trap while hidden', async () => {
     let calls = 0;
     const ui = mount({ getDownloadTasks: async () => { calls++; return [task(1)]; } });
@@ -68,6 +68,22 @@ const runningMerge = () => ({ id: 'm', status: 'running', total: 2, done: 0, pro
     assert.equal(ui.writes(), before, 'progress must wait for one short batch'); ui.advance(250); await ui.flush();
     assert.equal(ui.writes() - before, 1); assert.ok(ui.text().includes('80%')); ui.unmount();
   });
+  await test('select-all covers every page and clears every selection', async () => {
+    const ui = mount({ getDownloadTasks: async () => Array.from({ length: 205 }, (_, i) => task(i + 1, 'completed')) }); await ui.flush();
+    const all = ui.button('全选'); assert.ok(all, 'select-all must be visible beside task counts'); all.props.onClick(); ui.render();
+    assert.ok(ui.text().includes('已选 205 项')); assert.ok(rows(ui).every(r => r.props.className.includes('selected')));
+    ui.button('下一页').props.onClick(); ui.render(); ui.button('下一页').props.onClick(); ui.render();
+    assert.equal(rows(ui).length, 5); assert.ok(rows(ui).every(r => r.props.className.includes('selected')));
+    ui.button('取消全选').props.onClick(); ui.render(); assert.ok(rows(ui).every(r => !r.props.className.includes('selected'))); assert.equal(ui.button('删除选中').props.disabled, true);
+    rows(ui)[0].props.onClick(); ui.render(); ui.button('全选').props.onClick(); ui.render(); assert.ok(ui.text().includes('已选 205 项')); ui.unmount();
+  });
+  await test('whole-series merge needs no checked tasks and identifies its series', async () => {
+    let sent;
+    const ui = mount({ getDownloadTasks: async () => [task(1, 'completed'), task(2, 'completed')], getSeriesList: async () => [{ series_id: 'A', series_title: '整部示例剧' }], mergeSeries: async (...args) => { sent = args; return { success: true, count: 2, totalBytes: 1000 }; } }); await ui.flush();
+    assert.ok(ui.text().includes('无需勾选任务')); const merge = ui.button('合并整部剧'); assert.ok(merge); assert.equal(!!merge.props.disabled, false);
+    merge.props.onClick(); ui.render(); assert.ok(ui.text().includes('《整部示例剧》')); assert.ok(ui.text().includes('全部已下载分集'));
+    await ui.button('智能快速合并').props.onClick(); await ui.flush(); assert.equal(sent[0], 'A'); assert.equal(sent[2].compatible, false); ui.unmount();
+  });
   await test('task list pages at 100 while global totals and cross-page selections persist', async () => {
     const ui = mount({ getDownloadTasks: async () => Array.from({ length: 205 }, (_, i) => task(i + 1, 'completed')) }); await ui.flush();
     assert.equal(rows(ui).length, 100); assert.ok(ui.text().includes('已完成 205'));
@@ -90,7 +106,7 @@ const runningMerge = () => ({ id: 'm', status: 'running', total: 2, done: 0, pro
   });
   await test('unknown merge duration does not claim zero minutes', async () => {
     const ui = mount({ getSeriesList: async () => [{ series_id: 'A', series_title: 'A' }], mergeSeries: async () => ({ success: true, count: 2, totalBytes: 100000, totalDuration: 0 }) }); await ui.flush();
-    ui.button('合并导出').props.onClick(); ui.render(); await ui.button('智能快速合并').props.onClick(); await ui.flush();
+    ui.button('合并整部剧').props.onClick(); ui.render(); await ui.button('智能快速合并').props.onClick(); await ui.flush();
     assert.ok(!ui.text().includes('0 分钟')); assert.ok(ui.text().includes('开始合并 2 集')); ui.unmount();
   });
   console.log(`Download manager: ${passed} passed, ${failures} failed`); process.exitCode = failures ? 1 : 0;
