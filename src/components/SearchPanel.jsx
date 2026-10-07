@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import './HongguoDownload.css';
 import { Search, Film, RefreshCw, ExternalLink } from './icons';
 
 /**
- * SearchPanel —— 通过内嵌浏览器嗅探 hongguoduanju.com 的搜索结果
+ * SearchPanel —— 按所选来源搜索短剧
  * 拿到 series_id 后交给父组件走既有的「拉全集 + 选集下载」流程。
  */
 function SearchPanel({ onSelectSeries, onSwitchToInput }) {
+  const [source, setSource] = useState('hongguo');
+  const requestVersion = useRef(0);
+  useEffect(() => () => { requestVersion.current++; }, []);
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null); // null=未搜索, []=无结果
@@ -14,18 +17,32 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
   const [pageTitle, setPageTitle] = useState('');
   const [pickingId, setPickingId] = useState('');
 
+  const switchSource = (next) => {
+    if (next === source) return;
+    requestVersion.current++;
+    setSource(next);
+    setLoading(false);
+    setPickingId('');
+    setResults(null);
+    setError('');
+    setPageTitle('');
+  };
+
   const doSearch = async () => {
     const kw = keyword.trim();
     if (!kw) {
       setError('请输入剧名关键词');
       return;
     }
+    const request = ++requestVersion.current;
+    setPickingId('');
     setLoading(true);
     setError('');
     setResults(null);
     setPageTitle('');
     try {
-      const res = await window.electronAPI.searchSeries(kw);
+      const res = await window.electronAPI.searchSeries(kw, { source });
+      if (request !== requestVersion.current) return;
       if (!res || !res.success) {
         setError((res && res.error) || '搜索失败，请重试');
         setResults([]);
@@ -34,28 +51,31 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
         if (!res.results || res.results.length === 0) setPageTitle(res.pageTitle || '');
       }
     } catch (e) {
+      if (request !== requestVersion.current) return;
       setError('搜索异常: ' + e.message);
       setResults([]);
     } finally {
-      setLoading(false);
+      if (request === requestVersion.current) setLoading(false);
     }
   };
 
   // 选中某部剧 -> 拉取完整分集 -> 交给下载页
   const pick = async (item) => {
+    const request = ++requestVersion.current;
     setPickingId(item.series_id);
     setError('');
     try {
       const res = await window.electronAPI.searchResolve(item.series_id);
+      if (request !== requestVersion.current) return;
       if (res && res.success && res.data) {
         onSelectSeries(res.data);
       } else {
         setError((res && res.error) || '拉取分集失败');
       }
     } catch (e) {
-      setError('拉取分集异常: ' + e.message);
+      if (request === requestVersion.current) setError('拉取分集异常: ' + e.message);
     } finally {
-      setPickingId('');
+      if (request === requestVersion.current) setPickingId('');
     }
   };
 
@@ -69,6 +89,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
       <div className="card-header-title">
         <Search size={18} />
         <span>搜索短剧</span>
+        <label className="source-control">来源<select className="input-field" aria-label="短剧来源" value={source} onChange={(e) => switchSource(e.target.value)}><option value="hongguo">红果短剧</option><option value="xifan">西饭短剧</option></select></label>
       </div>
 
       <div className="input-group">
@@ -78,7 +99,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
           aria-label="搜索短剧名称"
           placeholder="输入剧名，例如：一村人养一个神"
           value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
+          onChange={(e) => { requestVersion.current++; setKeyword(e.target.value); setLoading(false); setPickingId(''); setResults(null); setError(''); }}
           onKeyDown={(e) => e.key === 'Enter' && doSearch()}
         />
         <button className="btn btn-primary" onClick={doSearch} disabled={loading}>
@@ -115,11 +136,11 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
         <div className="search-empty">
           <p>没有找到相关短剧{pageTitle ? `（页面标题：${pageTitle}）` : ''}</p>
           <div className="search-empty-actions">
-            <button className="btn btn-outline" onClick={showBrowser}>
+            {source === 'hongguo' && <button className="btn btn-outline" onClick={showBrowser}>
               <ExternalLink size={15} />
               打开来源页面
-            </button>
-            {onSwitchToInput && (
+            </button>}
+            {source === 'hongguo' && onSwitchToInput && (
               <button className="btn btn-outline" onClick={onSwitchToInput}>
                 改用链接 / ID 下载
               </button>

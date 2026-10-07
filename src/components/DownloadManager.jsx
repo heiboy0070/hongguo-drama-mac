@@ -122,7 +122,7 @@ function DownloadManager({ onNavigate }) {
       window.electronAPI.onMergeTaskAdded(() => loadMergeTasks()),
       window.electronAPI.onMergeProgress((data) => {
         setMergeTasks((prev) =>
-          prev.map((t) => (t.id === data.id ? { ...t, progress: data.progress, status: 'running' } : t))
+          prev.map((t) => (t.id === data.id ? { ...t, progress: data.progress, done: data.done ?? t.done, status: 'running' } : t))
         );
       }),
       window.electronAPI.onMergeCompleted((data) => {

@@ -292,6 +292,7 @@ async function resolveSeriesId(shareUrl) {
  * 获取全集剧集列表
  */
 async function fetchEpisodeList(seriesId) {
+  if (String(seriesId).startsWith('xifan:')) return require('./xifan').fetchEpisodeList(seriesId);
   return cachedRequest(`episodes:${seriesId}`, 60000, () => fetchEpisodeListFresh(seriesId));
 }
 
@@ -407,6 +408,7 @@ function parseModelVideo(vm) {
  * 获取单集播放直链与 spade_a 加密 key
  */
 async function fetchPlayUrlSingle(vid, sid) {
+  if (String(vid).startsWith('xifan:') || String(sid).startsWith('xifan:')) return require('./xifan').fetchPlayUrlSingle(vid, sid);
   try {
     return await cachedRequest(`play:${sid || ''}:${vid}`, 30000, () => fetchPlayUrlFresh(vid, sid));
   } catch (error) {

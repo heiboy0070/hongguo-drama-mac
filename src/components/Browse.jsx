@@ -3,16 +3,21 @@ import useDialogKeyboard from './useDialogKeyboard';
 import './Browse.css';
 import { Film, RefreshCw, ExternalLink, Download, Play, Check, X, Search } from './icons';
 
+const pageCache = new Map();
+const PAGE_CACHE_TTL_MS = 60_000;
+const LIST_TIMEOUT_MS = 25_000;
+
 /**
  * Browse —— 分类淘剧
  *
  * 数据链路：
- *   内嵌浏览器嗅探分类页 -> 卡片(series_id/剧名/封面/集数/标签)
+ *   独立来源目录 -> 卡片(series_id/剧名/封面/集数/标签)
  *   点卡片 -> 复用 search-resolve 拉全集并写入短剧档案
  *         -> 复用 get-series-episodes 拿到每集「已下载/下载中/未下载」状态
  *         -> 跳播放器 或 走既有批量下载
  */
 function Browse({ onNavigate }) {
+  const [source, setSource] = useState('hongguo');
   const [categories, setCategories] = useState([]);
   const [category, setCategory] = useState('real-drama');
   const [genre, setGenre] = useState('');
@@ -22,7 +27,8 @@ function Browse({ onNavigate }) {
   const [meta, setMeta] = useState({ total: 0, totalPages: 0, genres: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [pageTitle, setPageTitle] = useState('');
+  const [unsupported, setUnsupported] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState('');
 
   // 详情抽屉
   const [detail, setDetail] = useState(null); // { series_id, series_title, cover, episodes: [...] }
@@ -32,7 +38,19 @@ function Browse({ onNavigate }) {
   const [submitting, setSubmitting] = useState(false);
   const detailRequest = useRef(0);
   const listRequest = useRef(0);
+  const listTimer = useRef(null);
   const toastTimer = useRef(null);
+
+  const invalidateList = useCallback(() => {
+    listRequest.current++;
+    clearTimeout(listTimer.current);
+  }, []);
+
+  const cancelList = () => {
+    invalidateList();
+    setLoading(false);
+    setError('已取消加载，可重新加载或切换分类。');
+  };
 
   const closeDetail = useCallback(() => {
     detailRequest.current++;
@@ -42,9 +60,9 @@ function Browse({ onNavigate }) {
 
   useEffect(() => () => {
     detailRequest.current++;
-    listRequest.current++;
+    invalidateList();
     clearTimeout(toastTimer.current);
-  }, []);
+  }, [invalidateList]);
 
   // 已下载统计（按 series_id -> 已下载集数）
   const [downloadedMap, setDownloadedMap] = useState({});
@@ -83,33 +101,60 @@ function Browse({ onNavigate }) {
   }, []);
 
   const loadList = useCallback(
-    async (cat, gen, pg) => {
-      const request = ++listRequest.current;
-      setLoading(true);
+    async (cat, gen, pg, forceRefresh = false) => {
+      invalidateList();
+      const request = listRequest.current;
+      const key = JSON.stringify([source, cat, gen, pg]);
+      const cached = pageCache.get(key);
+      setUnsupported(false);
       setError('');
-      try {
-        const res = await window.electronAPI.browseList({ category: cat, genre: gen, page: pg });
+      setResults(cached?.results || []);
+      setMeta(cached?.meta || { total: 0, totalPages: 0, genres: [] });
+      setSourceUrl(cached?.sourceUrl || '');
+      if (!forceRefresh && cached && Date.now() - cached.savedAt < PAGE_CACHE_TTL_MS) {
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      listTimer.current = setTimeout(() => {
         if (request !== listRequest.current) return;
-        if (!res || !res.success) {
-          setError((res && res.error) || '加载失败，请重试');
-          setResults([]);
+        invalidateList();
+        setLoading(false);
+        setError(cached ? '刷新超时，仍显示上次片单；可重试或切换分类。' : '加载超时，请重试或切换分类。');
+      }, LIST_TIMEOUT_MS);
+      try {
+        const res = await window.electronAPI.browseList({ source, category: cat, genre: gen, page: pg, forceRefresh });
+        if (request !== listRequest.current) return;
+        if (!res?.success) throw new Error(res?.error || '来源暂时不可用');
+        const next = {
+          results: Array.isArray(res.results) ? res.results : [],
+          meta: { total: res.total || 0, totalPages: res.totalPages || 0, genres: res.genres || [], hasMore: res.hasMore === true },
+          sourceUrl: res.sourceUrl || '',
+          savedAt: Date.now(),
+        };
+        setResults(next.results);
+        setMeta(next.meta);
+        setSourceUrl(next.sourceUrl);
+        if (next.results.length) {
+          pageCache.delete(key);
+          pageCache.set(key, next);
+          if (pageCache.size > 24) pageCache.delete(pageCache.keys().next().value);
         } else {
-          setResults(res.results || []);
-          setMeta({ total: res.total || 0, totalPages: res.totalPages || 0, genres: res.genres || [] });
-          setPageTitle(res.pageTitle || '');
-          if (!res.results || res.results.length === 0) {
-            setError('这一页没有取到内容，可试试换分类或「打开来源页面」手动操作');
-          }
+          pageCache.delete(key);
+          setUnsupported(res.unsupported === true);
+          setError(res.emptyMessage || '这一页没有取到内容，可重新加载或换分类。');
         }
       } catch (e) {
         if (request !== listRequest.current) return;
-        setError('加载异常: ' + e.message);
-        setResults([]);
+        setError(`${cached ? '刷新失败，仍显示上次片单' : '加载失败'}：${e.message || '请重试'}`);
       } finally {
-        if (request === listRequest.current) setLoading(false);
+        if (request === listRequest.current) {
+          clearTimeout(listTimer.current);
+          setLoading(false);
+        }
       }
     },
-    []
+    [invalidateList, source]
   );
 
   useEffect(() => {
@@ -121,8 +166,25 @@ function Browse({ onNavigate }) {
     loadList(category, genre, page);
   }, [category, genre, page, loadList]);
 
+  const switchSource = (next) => {
+    if (next === source) return;
+    invalidateList();
+    closeDetail();
+    setSource(next);
+    setCategory('real-drama');
+    setGenre('');
+    setPage(1);
+    setResults([]);
+    setMeta({ total: 0, totalPages: 0, genres: [] });
+    setSourceUrl('');
+    setError('');
+  };
+
   const switchCategory = (slug) => {
     if (slug === category) return;
+    invalidateList();
+    setError('');
+    setMeta({ total: 0, totalPages: 0, genres: [] });
     setCategory(slug);
     setGenre('');
     setPage(1);
@@ -131,15 +193,19 @@ function Browse({ onNavigate }) {
 
   const switchGenre = (slug) => {
     if (slug === genre) return;
+    invalidateList();
+    setError('');
     setGenre(slug);
     setPage(1);
     setResults([]);
   };
 
   const gotoPage = (p) => {
-    const max = meta.totalPages || 1;
+    const max = source === 'xifan' ? page + (meta.hasMore ? 1 : 0) : meta.totalPages || 1;
     const next = Math.min(Math.max(1, p), max);
     if (next === page) return;
+    invalidateList();
+    setError('');
     setPage(next);
     document.querySelector('.main-content')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -174,7 +240,7 @@ function Browse({ onNavigate }) {
       }));
       setDetail({ ...data, episodes, completedCount: episodes.filter((e) => e.status === 'completed').length });
       // 默认全选未下载的
-      setSelectedIdx(new Set(episodes.filter((e) => e.status !== 'completed').map((e) => e.vid_index)));
+      setSelectedIdx(new Set(episodes.filter((e) => !e.locked && e.status !== 'completed').map((e) => e.vid_index)));
     } catch (e) {
       if (request === detailRequest.current) showToast('打开失败: ' + e.message, 'error');
     } finally {
@@ -183,6 +249,7 @@ function Browse({ onNavigate }) {
   };
 
   const toggleIdx = (idx) => {
+    if (!detail?.episodes.some((ep) => ep.vid_index === idx && !ep.locked)) return;
     const next = new Set(selectedIdx);
     if (next.has(idx)) next.delete(idx);
     else next.add(idx);
@@ -207,21 +274,21 @@ function Browse({ onNavigate }) {
         if (m) {
           const a = parseInt(m[1], 10);
           const b = parseInt(m[2], 10);
-          for (let i = Math.min(a, b); i <= Math.max(a, b); i++) push(i);
+          for (let i = Math.max(1, Math.min(a, b)); i <= Math.min(total, Math.max(a, b)); i++) push(i);
         } else if (/^\d+$/.test(p)) {
           push(parseInt(p, 10));
         }
       }
     };
     parse(expr);
-    setSelectedIdx(nums);
+    setSelectedIdx(new Set(detail.episodes.filter((e) => !e.locked && nums.has(e.vid_index)).map((e) => e.vid_index)));
   };
 
   const downloadSelected = async () => {
     if (!detail || selectedIdx.size === 0) return;
     setSubmitting(true);
     try {
-      const eps = detail.episodes.filter((e) => selectedIdx.has(e.vid_index));
+      const eps = detail.episodes.filter((e) => !e.locked && selectedIdx.has(e.vid_index));
       const res = await window.electronAPI.hongguoDownloadBatch({
         seriesId: detail.series_id,
         seriesTitle: detail.series_title,
@@ -244,7 +311,7 @@ function Browse({ onNavigate }) {
   // 从第一集开始；播放器按实际状态选择本地或在线片源。
   const playNow = async () => {
     if (!detail) return;
-    const first = detail.episodes[0];
+    const first = detail.episodes.find((e) => !e.locked);
     if (!first) return;
     try {
       const res = await window.electronAPI.playSeries({ seriesId: detail.series_id, vidIndex: first.vid_index });
@@ -256,8 +323,12 @@ function Browse({ onNavigate }) {
   };
 
   const showBrowser = async () => {
-    await window.electronAPI.searchWindowShow(true);
-    showToast('已打开浏览器窗口，可手动操作；关闭后回到本页继续');
+    if (source !== 'hongguo' || !sourceUrl) return;
+    try {
+      const res = await window.electronAPI.searchWindowShow(true, sourceUrl);
+      if (res?.success === false) throw new Error(res.error || '来源页面打开失败');
+      showToast('已打开当前来源页面');
+    } catch (e) { showToast(e.message || '来源页面打开失败', 'error'); }
   };
 
   useDialogKeyboard(!!detail || detailLoading, closeDetail, '.browse-drawer');
@@ -283,17 +354,19 @@ function Browse({ onNavigate }) {
           <div><h2>发现短剧</h2><p className="page-description">挑一部喜欢的，让故事继续。</p></div>
         </div>
         <div className="browse-header-right">
+          <label className="source-control">来源<select className="input-field" aria-label="短剧来源" value={source} onChange={(e) => switchSource(e.target.value)}><option value="hongguo">红果短剧</option><option value="xifan">西饭短剧</option></select></label>
           <button className="btn btn-primary" onClick={() => onNavigate('download')}><Search size={15} />搜索短剧</button>
+          <button className="btn btn-outline" disabled={loading} onClick={() => loadList(category, genre, page, true)}><RefreshCw size={15} />刷新片单</button>
           {meta.total > 0 && <span className="browse-stat">共 {meta.total} 部</span>}
-          <button className="btn btn-outline" onClick={showBrowser}>
+          {source === 'hongguo' && sourceUrl && <button className="btn btn-outline" onClick={showBrowser}>
             <ExternalLink size={15} />
             打开来源页面
-          </button>
+          </button>}
         </div>
       </div>
 
       {/* 分类 tab */}
-      <div className="browse-cats">
+      {source === 'hongguo' && <div className="browse-cats">
         {(categories.length ? categories : [{ slug: 'real-drama', label: '真人剧' }]).map((c) => (
           <button
             key={c.slug}
@@ -303,7 +376,7 @@ function Browse({ onNavigate }) {
             {c.label}
           </button>
         ))}
-      </div>
+      </div>}
 
       {/* 题材 chips */}
       {meta.genres.length > 0 && (
@@ -312,7 +385,7 @@ function Browse({ onNavigate }) {
             className={`genre-chip ${genre === '' ? 'active' : ''}`}
             onClick={() => switchGenre('')}
           >
-            全部
+            {source === 'xifan' ? '默认分类' : '全部'}
           </button>
           {meta.genres.map((g) => (
             <button
@@ -326,10 +399,12 @@ function Browse({ onNavigate }) {
         </div>
       )}
 
-      {error && <div className="browse-error-state" role="alert"><Film size={36} /><h3>暂时没能加载剧集</h3><p>{error}</p><div className="search-empty-actions"><button className="btn btn-primary" onClick={() => loadList(category, genre, page)}><RefreshCw size={15} />重新加载</button><button className="btn btn-outline" onClick={() => onNavigate('download')}>按剧名搜索</button></div></div>}
+      {error && <div className="browse-error-state" role={unsupported ? 'status' : 'alert'}><Film size={36} /><h3>{unsupported ? '这里是图文漫画' : '暂时没能加载剧集'}</h3><p>{error}</p><div className="search-empty-actions">{unsupported ? <button className="btn btn-primary" onClick={() => switchCategory('comic-drama')}>查看漫剧</button> : <button className="btn btn-primary" onClick={() => loadList(category, genre, page, true)}><RefreshCw size={15} />重新加载</button>}<button className="btn btn-outline" onClick={() => onNavigate('download')}>按剧名搜索</button></div></div>}
 
-      {loading ? (
-        <div className="browse-loading-state" role="status"><div className="browse-loading"><RefreshCw size={18} className="spin" /><span>正在加载短剧…</span></div><div className="poster-skeletons" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <div className="poster-skeleton" key={i}><div /><span /><span /></div>)}</div></div>
+      {loading && results.length > 0 && <div className="browse-loading" role="status"><RefreshCw size={18} className="spin" /><span>正在更新片单，仍可浏览上次结果…</span><button className="btn btn-outline btn-sm" onClick={cancelList}>取消加载</button></div>}
+
+      {loading && results.length === 0 ? (
+        <div className="browse-loading-state" role="status"><div className="browse-loading"><RefreshCw size={18} className="spin" /><span>正在加载{categories.find((item) => item.slug === category)?.label || '短剧'}…</span><button className="btn btn-outline btn-sm" onClick={cancelList}>取消加载</button></div><div className="poster-skeletons" aria-hidden="true">{Array.from({ length: 5 }, (_, i) => <div className="poster-skeleton" key={i}><div /><span /><span /></div>)}</div></div>
       ) : (
         <div className="browse-grid">
           {results.map((item) => {
@@ -395,6 +470,8 @@ function Browse({ onNavigate }) {
         </div>
       )}
 
+      {source === 'xifan' && (page > 1 || meta.hasMore) && <div className="browse-pager"><button className="pager-item" disabled={page <= 1 || loading} onClick={() => gotoPage(page - 1)}>上一页</button><span>第 {page} 页</span><button className="pager-item" disabled={!meta.hasMore || loading} onClick={() => gotoPage(page + 1)}>下一页</button></div>}
+
       {/* ===== 剧集详情抽屉 ===== */}
       {(detail || detailLoading) && (
         <div className="browse-drawer-mask" onClick={closeDetail}>
@@ -423,11 +500,12 @@ function Browse({ onNavigate }) {
                     {detail.cover && <img src={detail.cover} alt="" className="browse-drawer-cover" />}
                     <div className="browse-drawer-meta">
                       <div className="browse-drawer-count">
-                        共 {detail.total} 集 · 已下载 <b>{detail.completedCount}</b> 集
+                        {String(detail.series_id).startsWith('xifan:') ? '西饭短剧' : '红果短剧'} · 共 {detail.total} 集 · 已下载 <b>{detail.completedCount}</b> 集
                       </div>
                       {detail.web_accessible_episodes != null && detail.web_accessible_episodes < detail.total && (
                         <div className="browse-drawer-sub">网页源提供前 {detail.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</div>
                       )}
+                      {detail.episodes.some((ep) => ep.locked) && <div className="browse-drawer-sub">标记“锁定”的集数需在来源平台解锁，本应用不提供解锁。</div>}
                       <div className="browse-drawer-sub">选中 {selectedIdx.size} 集待下载</div>
                       <div className="browse-range-row">
                         <input
@@ -445,7 +523,7 @@ function Browse({ onNavigate }) {
                         <button className="btn-chip" onClick={() => applyRange(`1-${Math.min(10, detail.total)}`)}>前10集</button>
                         <button className="btn-chip" onClick={() => applyRange(`1-${Math.min(30, detail.total)}`)}>前30集</button>
                         <button className="btn-chip" onClick={() => applyRange(`${Math.max(1, detail.total - 29)}-${detail.total}`)}>后30集</button>
-                        <button className="btn-chip" onClick={() => setSelectedIdx(new Set(detail.episodes.map((e) => e.vid_index)))}>全选</button>
+                        <button className="btn-chip" onClick={() => setSelectedIdx(new Set(detail.episodes.filter((e) => !e.locked).map((e) => e.vid_index)))}>全选</button>
                         <button className="btn-chip" onClick={() => setSelectedIdx(new Set())}>清空</button>
                       </div>
                     </div>
@@ -454,13 +532,14 @@ function Browse({ onNavigate }) {
                   <div className="browse-eps">
                     {detail.episodes.map((ep) => (
                       <button
+                        disabled={ep.locked === true}
                         aria-pressed={selectedIdx.has(ep.vid_index)}
                         key={ep.vid_index}
                         className={`ep-chip ep-${ep.status} ${selectedIdx.has(ep.vid_index) ? 'ep-picked' : ''}`}
                         onClick={() => toggleIdx(ep.vid_index)}
-                        title={ep.title || `第 ${ep.vid_index} 集`}
+                        title={ep.locked ? '需在来源平台解锁' : ep.title || `第 ${ep.vid_index} 集`}
                       >
-                        <span className="ep-num">{ep.vid_index}</span>
+                        <span className="ep-num">{ep.vid_index}</span>{ep.locked && <span className="ep-lock-label">锁定</span>}
                         {ep.status === 'completed' && <Check size={11} className="ep-badge" />}
                         {selectedIdx.has(ep.vid_index) && <span className="ep-pick-dot" />}
                       </button>
@@ -469,7 +548,7 @@ function Browse({ onNavigate }) {
                 </div>
 
                 <div className="browse-drawer-foot">
-                  <button className="btn btn-outline" onClick={playNow}>
+                  <button className="btn btn-outline" disabled={!detail.episodes.some((ep) => !ep.locked)} onClick={playNow}>
                     <Play size={15} />
                     立即播放
                   </button>

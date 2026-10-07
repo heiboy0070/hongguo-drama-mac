@@ -15,7 +15,7 @@ const fsp = require('fs/promises');
 const axios = require('axios');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 
 const hongguo = require('./src/native/hongguo');
 const store = require('./src/store');
@@ -368,6 +368,7 @@ function upsertSeriesRegistry(data) {
       title: e.title || '',
       cover: e.cover || '',
       web_available: e.web_available ?? null,
+      locked: e.locked === true,
     })),
     updatedAt: Date.now(),
     dismissed: false, // 用户主动移除过；再次登记时自动恢复显示
@@ -507,17 +508,21 @@ async function executeHongguoDownload(task) {
     sendToRenderer('download-progress', { id, progress: 0, receivedBytes: 0, totalBytes: 0 });
     const settings = getCurrentSettings();
     const root = String(settings.root || '').trim() || app.getPath('downloads');
-    const downloadDir = task.customDir || path.join(root, '红果短剧', sanitizeFolderName(series_title) || '未命名短剧');
+    const downloadDir = task.customDir || seriesDownloadDir(root, hongguoInfo?.series_id, series_title);
     fs.mkdirSync(downloadDir, { recursive: true });
     const finalPath = task.savePath || path.join(downloadDir, filename);
     task.savePath = finalPath;
-    // Existing complete files need no network request at all.
+    // Recheck source access before reusing an existing Xifan file or URL.
+    const checkedPlayInfo = String(vid).startsWith('xifan:')
+      ? await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id) : null;
+    if (checkedPlayInfo && !checkedPlayInfo.url) throw new Error(checkedPlayInfo.error || '来源未开放该集');
+    // Existing complete files need no additional media transfer.
     if (fs.existsSync(finalPath) && fs.statSync(finalPath).size > 1024 * 100) {
       task.status = 'completed'; task.progress = 100; task.endTime = Date.now();
       saveDownloadTasks(); sendToRenderer('download-completed', { id, path: finalPath });
       return;
     }
-    const playInfo = await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id);
+    const playInfo = checkedPlayInfo || await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id);
     source.token.throwIfRequested();
     if (!playInfo?.url) throw new Error(playInfo?.error || '未获取到有效播放地址');
     tmpPath = finalPath + '.enc.tmp';
@@ -604,6 +609,12 @@ const SEARCH_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 const SEARCH_TIMEOUT_MS = 15000;
 
+function sourcePageUrl(value) {
+  const url = new URL(value);
+  if (url.origin !== SEARCH_SITE || url.username || url.password) throw new Error('仅允许打开红果来源页面');
+  return url.href;
+}
+
 let searchWindow = null;
 let searchWindowReady = null;
 
@@ -624,9 +635,7 @@ function getSearchWindow() {
   });
   // 站内跳转保持在同一个窗口内，避免弹出新窗口
   searchWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith(SEARCH_SITE)) {
-      searchWindow.loadURL(url);
-    }
+    try { searchWindow.loadURL(sourcePageUrl(url)).catch(() => {}); } catch (_) {}
     return { action: 'deny' };
   });
   searchWindow.on('closed', () => {
@@ -812,38 +821,14 @@ const BROWSE_CATEGORIES = [
 
 ipcMain.handle('browse-categories', async () => BROWSE_CATEGORIES);
 
-ipcMain.handle('browse-list', async (event, options) => {
-  try {
-    const { category = 'real-drama', genre = '', page = 1 } = options || {};
-    const cat = String(category).replace(/[^a-z0-9-]/gi, '') || 'real-drama';
-    const gen = String(genre).replace(/[^a-z0-9-]/gi, '');
-    const pg = Math.max(1, parseInt(page, 10) || 1);
+ipcMain.handle('browse-list', (_event, options) =>
+  require(options?.source === 'xifan' ? './src/native/xifan' : './src/native/catalog').browseList(options));
 
-    let url = `${SEARCH_SITE}/category/${cat}`;
-    if (gen) url += `/${gen}`;
-    if (pg > 1) url += `?page=${pg}`;
-
-    const res = await runSniffOnUrl(url, 'Browse');
-    if (!res.success) return res;
-    return {
-      success: true,
-      results: res.results,
-      page: (res.meta && res.meta.page) || pg,
-      totalPages: (res.meta && res.meta.totalPages) || 0,
-      total: (res.meta && res.meta.total) || 0,
-      genres: (res.meta && res.meta.genres) || [],
-      pageTitle: res.pageTitle || '',
-    };
-  } catch (error) {
-    console.error('[Browse] 失败:', error.message);
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('search-series', async (event, keyword) => {
+ipcMain.handle('search-series', async (event, keyword, options = {}) => {
   const kw = String(keyword || '').trim();
   if (!kw) return { success: false, error: '请输入搜索关键词' };
   try {
+    if (options?.source === 'xifan') return await require('./src/native/xifan').search(kw);
     return await runSearchSniff(kw);
   } catch (error) {
     console.error('[Search] 失败:', error.message);
@@ -865,8 +850,15 @@ ipcMain.handle('search-resolve', async (event, seriesId) => {
 });
 
 // 搜索窗口可见性（超时兜底：让用户自己操作）
-ipcMain.handle('search-window-show', async (event, visible) => {
+ipcMain.handle('search-window-show', async (event, visible, sourceUrl) => {
+  let target;
+  try { if (sourceUrl) target = sourcePageUrl(sourceUrl); }
+  catch (error) { return { success: false, error: error.message }; }
   const win = getSearchWindow();
+  if (target) {
+    try { await win.loadURL(target, { userAgent: SEARCH_UA }); }
+    catch (error) { return { success: false, error: error.message }; }
+  }
   if (visible) {
     win.show();
     win.focus();
@@ -1071,26 +1063,32 @@ function probeDuration(ffprobePath, file) {
   });
 }
 
-function probeVideoInfo(ffprobePath, file) {
+function probeVideoInfo(ffprobePath, file, task) {
   return new Promise((resolve) => {
     const { execFile } = require('child_process');
-    execFile(
+    const child = execFile(
       ffprobePath,
-      ['-v', 'error', '-select_streams', 'v:0',
-       '-show_entries', 'stream=codec_name,width,height', '-of', 'json', file],
+      ['-v', 'error', '-show_data_hash', 'sha256',
+       '-show_entries', 'stream=codec_type,codec_name,codec_tag_string,profile,level,width,height,pix_fmt,sample_aspect_ratio,r_frame_rate,time_base,extradata_hash,sample_rate,channels,channel_layout:format=duration', '-of', 'json', file],
       { timeout: 30000 },
       (err, stdout) => {
+        if (task?.child === child) delete task.child;
         if (err) return resolve(null);
         try {
           const j = JSON.parse(stdout);
-          const s = (j.streams || [])[0];
+          const s = (j.streams || []).find(stream => stream.codec_type === 'video');
+          const audio = (j.streams || []).find(stream => stream.codec_type === 'audio');
           if (!s) return resolve(null);
-          resolve({ codec: s.codec_name, w: s.width, h: s.height });
+          resolve({ codec: s.codec_name, w: s.width, h: s.height, audio: !!audio,
+            duration: Number(j.format?.duration) || 0,
+            // Include codec initialization bytes, not just the codec name/size.
+            signature: JSON.stringify([s, audio || null]) });
         } catch (_) {
           resolve(null);
         }
       }
     );
+    if (task) task.child = child;
   });
 }
 
@@ -1121,13 +1119,22 @@ ipcMain.handle('show-in-folder', async (event, filePath) => {
 
 ipcMain.handle('get-merge-tasks', async () => mergeTasks.map(({ child, ...rest }) => rest));
 
+function seriesDownloadDir(root, seriesId, seriesTitle) {
+  const title = sanitizeFolderName(seriesTitle) || '未命名短剧';
+  if (String(seriesId).startsWith('xifan:')) {
+    const suffix = createHash('sha256').update(String(seriesId)).digest('hex').slice(0, 12);
+    return path.join(root, '西饭短剧', `${title}-${suffix}`);
+  }
+  return path.join(root, '红果短剧', title);
+}
+
 /** 找到某剧在磁盘上的目录（优先用任务记录，其次按标题推导） */
 function resolveSeriesDir(seriesId, seriesTitle, covers) {
   const fromTask = covers.find((t) => t.customDir && fs.existsSync(t.customDir));
   if (fromTask) return fromTask.customDir;
   const settings = getCurrentSettings();
   const root = (settings.root && String(settings.root).trim()) ? String(settings.root).trim() : app.getPath('downloads');
-  const guess = path.join(root, '红果短剧', sanitizeFolderName(seriesTitle) || '未命名短剧');
+  const guess = seriesDownloadDir(root, seriesId, seriesTitle);
   return fs.existsSync(guess) ? guess : null;
 }
 
@@ -1186,219 +1193,144 @@ function collectSeriesEpisodeFiles(seriesId, seriesTitle) {
 ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
   try {
     const sid = String(seriesId);
-    const entry = seriesRegistry.find((s) => String(s.series_id) === sid);
-    const seriesTitle =
-      (entry && entry.series_title) ||
-      ((downloadTasks.find((t) => t.hongguoInfo && String(t.hongguoInfo.series_id) === sid) || {}).hongguoInfo || {}).series_title ||
-      '未命名短剧';
-    const entries = (entry && entry.episodes) || [];
-
+    const entry = seriesRegistry.find(s => String(s.series_id) === sid);
+    const seriesTitle = entry?.series_title || downloadTasks.find(t => String(t.hongguoInfo?.series_id) === sid)?.hongguoInfo.series_title || '未命名短剧';
     const { dir, ordered } = collectSeriesEpisodeFiles(sid, seriesTitle);
     if (!ordered.length) return { success: false, error: '该剧还没有已下载完成的分集' };
-
-    const ffmpegPath = resolveFfmpeg('ffmpeg');
-    const ffprobePath = resolveFfmpeg('ffprobe');
-    if (!ffmpegPath) {
-      return { success: false, error: '未找到 ffmpeg，无法合并（请重装完整版本）' };
-    }
-
+    const ffmpegPath = resolveFfmpeg('ffmpeg'), ffprobePath = resolveFfmpeg('ffprobe');
+    if (!ffmpegPath || !ffprobePath) return { success: false, error: '未找到完整 FFmpeg 工具，无法检查并合并分集' };
     const outDir = dir || path.dirname(ordered[0].path);
-    const baseName = outputName && String(outputName).trim()
-      ? sanitizeFolderName(outputName)
-      : `${sanitizeFolderName(seriesTitle)}_合集`;
+    const baseName = outputName && String(outputName).trim() ? sanitizeFolderName(outputName) : `${sanitizeFolderName(seriesTitle)}_合集`;
     const output = path.join(outDir, `${baseName}.mp4`);
-
-    if (fs.existsSync(output)) {
-      return { success: false, error: `输出文件已存在：${baseName}.mp4，请先删除或换个名字` };
-    }
-
-    // 磁盘空间检查（输出约等于各集之和）
-    const totalBytes = ordered.reduce((s, e) => s + fs.statSync(e.path).size, 0);
-    try {
-      const st = fs.statfsSync(outDir);
-      const free = st.bavail * st.bsize;
-      if (free < totalBytes * 1.1) {
-        return {
-          success: false,
-          error: `磁盘空间不足：需要约 ${(totalBytes / 1073741824).toFixed(1)} GB，可用 ${(free / 1073741824).toFixed(1)} GB`,
-        };
-      }
-    } catch (_) {}
-
-    // 编码一致性抽检（首集 vs 后续抽样）
-    let codecWarning = '';
-    if (ffprobePath) {
-      const first = await probeVideoInfo(ffprobePath, ordered[0].path);
-      const sampleIdx = [Math.floor(ordered.length / 2), ordered.length - 1];
-      for (const i of sampleIdx) {
-        if (i <= 0 || i >= ordered.length) continue;
-        const s = await probeVideoInfo(ffprobePath, ordered[i].path);
-        if (first && s && (first.codec !== s.codec || first.w !== s.w || first.h !== s.h)) {
-          codecWarning = `第 ${ordered[i].vid_index} 集编码与首集不一致（${s.codec} ${s.w}x${s.h} vs ${first.codec} ${first.w}x${first.h}），合并后可能出现花屏`;
-          break;
-        }
-      }
-    }
-
-    // 写 concat 列表（UTF-8 无 BOM；绝对路径配 -safe 0，规避中文/空格转义问题）
-    const listPath = path.join(outDir, `.${baseName}.ffconcat.txt`);
-    const listBody = ordered.map((e) => `file '${e.path.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(listPath, listBody + '\n', 'utf8');
-
-    // 总时长（用于进度百分比）
-    let totalDuration = 0;
-    if (ffprobePath) {
-      for (const e of ordered) totalDuration += await probeDuration(ffprobePath, e.path);
-    }
-
-    const id = 'merge_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-    const task = {
-      id,
-      seriesId: sid,
-      seriesTitle,
-      output,
-      outputName: `${baseName}.mp4`,
-      total: ordered.length,
-      done: 0,
-      progress: 0,
-      status: 'running',
-      totalBytes,
-      totalDuration,
-      codecWarning,
-      error: '',
-      startTime: Date.now(),
-    };
+    if (fs.existsSync(output)) return { success: false, error: `输出文件已存在：${baseName}.mp4，请先删除或换个名字` };
+    if (mergeTasks.some(t => t.output === output && t.status === 'running')) return { success: false, error: '该文件正在合并，请等待完成或先取消' };
+    const totalBytes = ordered.reduce((sum, e) => sum + fs.statSync(e.path).size, 0);
+    const id = 'merge_' + randomUUID();
+    const task = { id, seriesId: sid, seriesTitle, output, outputName: `${baseName}.mp4`, total: ordered.length,
+      done: 0, progress: 0, status: 'running', totalBytes, totalDuration: 0, codecWarning: '', error: '', startTime: Date.now() };
     mergeTasks.unshift(task);
+    saveMergeTasks();
     sendToRenderer('merge-task-added', { ...task });
 
-    const tmpOutput = output + '.part';
-    const { spawn } = require('child_process');
-
-    // 兼容格式：转码为 H.264，任何播放器/电脑都能播（慢，但通用）
-    let videoArgs;
-    if (options && options.compatible) {
-      const encoder = await pickH264Encoder(ffmpegPath);
-      videoArgs = encoder === 'libx264'
-        ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-profile:v', 'high', '-level', '4.2']
-        : encoder === 'h264_videotoolbox'
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '6M', '-pix_fmt', 'yuv420p']
-        : encoder === 'h264_nvenc'
-        ? ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '23', '-b:v', '0']
-        : encoder === 'h264_qsv'
-        ? ['-c:v', 'h264_qsv', '-global_quality', '23']
-        : encoder === 'h264_amf'
-        ? ['-c:v', 'h264_amf', '-quality', 'speed', '-rc', 'cqp', '-qp_i', '23', '-qp_p', '23']
-        : ['-c:v', encoder, '-cq', '23'];
-      videoArgs = [...videoArgs, '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k'];
-      console.log('[Merge] 兼容格式合并，编码器:', encoder);
-    } else {
-      videoArgs = ['-c', 'copy'];
-    }
-
-    // 注意：.part 扩展名无法让 ffmpeg 推断封装格式，必须显式 -f mp4
-    const args = [
-      '-y', '-hide_banner',
-      '-f', 'concat', '-safe', '0', '-i', listPath,
-      ...videoArgs, '-movflags', '+faststart',
-      '-progress', 'pipe:1', '-nostats',
-      '-f', 'mp4',
-      tmpOutput,
-    ];
-    console.log('[Merge] 开始合并', ordered.length, '集 ->', output);
-    const child = spawn(ffmpegPath, args, { windowsHide: true });
-    task.child = child;
-
-    let stdoutBuf = '';
-    child.stdout.on('data', (d) => {
-      stdoutBuf += d.toString();
-      const lines = stdoutBuf.split('\n');
-      stdoutBuf = lines.pop() || '';
-      for (const line of lines) {
-        const m = line.match(/^out_time_us=(\d+)/);
-        if (m && totalDuration > 0) {
-          const sec = parseInt(m[1], 10) / 1e6;
-          const pct = Math.max(0, Math.min(99, Math.floor((sec / totalDuration) * 100)));
-          if (pct !== task.progress) {
-            task.progress = pct;
-            sendToRenderer('merge-progress', { id, progress: pct });
-          }
-        }
-      }
-    });
-
-    let stderrTail = '';
-    child.stderr.on('data', (d) => {
-      stderrTail = (stderrTail + d.toString()).slice(-1200);
-    });
-
-    child.on('error', (err) => {
-      task.status = 'failed';
-      task.error = '无法启动 ffmpeg: ' + err.message;
-      saveMergeTasks();
-      sendToRenderer('merge-failed', { id, error: task.error });
-    });
-
-    child.on('close', (code) => {
-      try { fs.unlinkSync(listPath); } catch (_) {}
-      delete task.child;
-      if (task.cancelled) {
-        try { fs.existsSync(tmpOutput) && fs.unlinkSync(tmpOutput); } catch (_) {}
-        task.status = 'stopped';
-        task.error = '已取消';
-      } else if (code === 0 && fs.existsSync(tmpOutput)) {
-        try {
-          fs.renameSync(tmpOutput, output);
-          const size = fs.statSync(output).size;
-          task.status = 'completed';
-          task.progress = 100;
-          task.done = ordered.length;
-          task.outputBytes = size;
-          console.log('[Merge] 完成:', output, (size / 1048576).toFixed(1) + 'MB');
-          // 输出校验：确认能被正常解析（避免产出坏文件却报成功）
-          if (ffprobePath) {
-            probeVideoInfo(ffprobePath, output).then((info) => {
-              if (!info) {
-                task.error = '输出文件无法被解析，可能已损坏';
-                task.status = 'failed';
-                saveMergeTasks();
-                sendToRenderer('merge-failed', { id, error: task.error });
-              } else {
-                task.verified = `${info.codec} ${info.w}x${info.h}`;
-                saveMergeTasks();
-                sendToRenderer('merge-completed', { id, path: output, verified: task.verified });
-              }
-            });
-            return; // 校验后再发完成事件
-          }
-        } catch (e) {
-          task.status = 'failed';
-          task.error = '重命名输出失败: ' + e.message;
-        }
-      } else {
-        task.status = 'failed';
-        task.error = `ffmpeg 退出码 ${code}${stderrTail ? '：' + stderrTail.split('\n').filter(Boolean).slice(-2).join(' ') : ''}`;
-        try { fs.existsSync(tmpOutput) && fs.unlinkSync(tmpOutput); } catch (_) {}
-      }
-      saveMergeTasks();
-      if (task.status === 'completed') {
-        sendToRenderer('merge-completed', { id, path: output, error: '' });
-      } else {
-        sendToRenderer('merge-failed', { id, path: output, error: task.error });
-      }
-    });
-
-    return {
-      success: true,
-      id,
-      output,
-      outputName: `${baseName}.mp4`,
-      count: ordered.length,
-      totalBytes,
-      totalDuration,
-      codecWarning,
+    // Register before probing so preparation, transcoding and concatenation can all be cancelled.
+    const checkCancelled = () => { if (task.cancelled) throw new Error('已取消'); };
+    const progress = value => {
+      const pct = Math.max(task.progress, Math.min(99, Math.floor(value)));
+      if (pct !== task.progress) { task.progress = pct; sendToRenderer('merge-progress', { id, progress: pct, done: task.done }); }
     };
+    const run = (args, duration, base, span) => new Promise((resolve, reject) => {
+      if (task.cancelled) return reject(new Error('已取消'));
+      const { spawn } = require('child_process');
+      const child = spawn(ffmpegPath, ['-y', '-hide_banner', '-loglevel', 'error', ...args, '-progress', 'pipe:1', '-nostats'], { windowsHide: true });
+      task.child = child;
+      let stdout = '', firstErrors = '', lastErrors = '';
+      child.stdout.on('data', data => {
+        stdout += data.toString();
+        const lines = stdout.split('\n'); stdout = lines.pop() || '';
+        for (const line of lines) {
+          const match = line.match(/^out_time_us=(\d+)/);
+          if (match && duration > 0) progress(base + Math.min(1, Number(match[1]) / 1e6 / duration) * span);
+        }
+      });
+      // Errors only: progress is on stdout, so the original failure cannot be displaced by stats.
+      child.stderr.on('data', data => {
+        const text = data.toString();
+        if (firstErrors.length < 1200) firstErrors = (firstErrors + text).slice(0, 1200);
+        lastErrors = (lastErrors + text).slice(-1200);
+      });
+      child.once('error', error => reject(new Error('无法启动 FFmpeg: ' + error.message)));
+      child.once('close', code => {
+        if (task.child === child) delete task.child;
+        if (task.cancelled) reject(new Error('已取消'));
+        else if (code !== 0) {
+          const detail = firstErrors === lastErrors ? firstErrors : firstErrors + '\n' + lastErrors;
+          reject(new Error(`FFmpeg 退出码 ${code}：${detail.trim() || '没有返回错误详情'}`));
+        } else resolve();
+      });
+    });
+    (async () => {
+      let temporary;
+      try {
+        const infos = [];
+        for (const episode of ordered) {
+          checkCancelled();
+          const info = await probeVideoInfo(ffprobePath, episode.path, task);
+          checkCancelled();
+          if (!info || info.duration <= 0) throw new Error(`第 ${episode.vid_index} 集无法读取有效视频信息，请重新下载本集`);
+          infos.push(info);
+        }
+        task.totalDuration = infos.reduce((sum, info) => sum + info.duration, 0);
+        const normalize = !!options?.compatible || infos.some(info => info.signature !== infos[0].signature);
+        task.codecWarning = normalize ? '正在逐集统一为 H.264/AAC 后合并，耗时取决于总时长；原文件保留' : '';
+        // Both normalized intermediates and final MP4 coexist until the result is verified.
+        const required = normalize ? Math.max(totalBytes * 2.2, task.totalDuration * 1000000 * 2.2) : totalBytes * 1.1;
+        try {
+          const st = fs.statfsSync(outDir), free = st.bavail * st.bsize;
+          if (free < required) throw new Error(`磁盘空间不足：需要约 ${(required / 1073741824).toFixed(1)} GB，可用 ${(free / 1073741824).toFixed(1)} GB`);
+        } catch (error) { if (error.message.startsWith('磁盘空间不足')) throw error; }
+        saveMergeTasks();
+        temporary = await fsp.mkdtemp(path.join(outDir, '.merge-'));
+        let files = ordered.map(e => e.path);
+        if (normalize) {
+          const width = Math.ceil(infos[0].w / 2) * 2, height = Math.ceil(infos[0].h / 2) * 2;
+          let encoder = await pickH264Encoder(ffmpegPath);
+          const normalizeAll = async () => {
+            const normalized = [];
+            let elapsed = 0;
+            for (let i = 0; i < ordered.length; i++) {
+              checkCancelled();
+              const target = path.join(temporary, `${i}.mp4`);
+              const videoArgs = encoder === 'libx264'
+                ? ['-c:v', encoder, '-preset', 'veryfast', '-crf', '23']
+                : ['-c:v', encoder, '-b:v', '6M'];
+              const args = ['-i', ordered[i].path];
+              if (!infos[i].audio) args.push('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo');
+              args.push('-map', '0:v:0', '-map', infos[i].audio ? '0:a:0' : '1:a:0',
+                '-vf', `scale=${width}:${height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,settb=1/90000,setpts=PTS-STARTPTS`,
+                ...videoArgs, '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-bf', '0', '-g', '60', '-video_track_timescale', '90000',
+                '-af', 'aresample=48000:async=1:first_pts=0,apad', '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2',
+                '-t', String(infos[i].duration), '-map_metadata', '-1', '-f', 'mp4', target);
+              await run(args, infos[i].duration, elapsed / task.totalDuration * 90, infos[i].duration / task.totalDuration * 90);
+              elapsed += infos[i].duration; task.done = i + 1; normalized.push(target);
+            }
+            return normalized;
+          };
+          try { files = await normalizeAll(); }
+          catch (error) {
+            checkCancelled();
+            if (encoder === 'libx264') throw error;
+            // Never mix hardware and software bitstreams: restart the same normalization pass.
+            encoder = 'libx264'; task.done = 0;
+            files = await normalizeAll();
+          }
+        }
+        checkCancelled();
+        const listPath = path.join(temporary, 'list.ffconcat');
+        fs.writeFileSync(listPath, files.map(file => `file '${file.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n') + '\n', 'utf8');
+        const tmpOutput = path.join(temporary, 'output.mp4');
+        await run(['-f', 'concat', '-safe', '0', '-i', listPath, '-map', '0:v:0', '-map', '0:a:0?', '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', tmpOutput], task.totalDuration, normalize ? 90 : 0, normalize ? 9 : 99);
+        checkCancelled();
+        const info = await probeVideoInfo(ffprobePath, tmpOutput, task);
+        checkCancelled();
+        if (!info || Math.abs(info.duration - task.totalDuration) > Math.max(0.5, task.totalDuration * 0.005)) throw new Error('合并输出时长校验失败，原始分集未改动');
+        if (fs.existsSync(output)) throw new Error('输出文件已存在，未覆盖该文件');
+        fs.renameSync(tmpOutput, output);
+        task.verified = `${info.codec} ${info.w}x${info.h}`;
+        task.outputBytes = fs.statSync(output).size;
+        task.status = 'completed'; task.progress = 100; task.done = ordered.length;
+      } catch (error) {
+        task.status = task.cancelled ? 'stopped' : 'failed';
+        task.error = task.cancelled ? '已取消' : error.message;
+      } finally {
+        delete task.child;
+        if (temporary) { try { await fsp.rm(temporary, { recursive: true, force: true }); } catch (_) {} }
+        task.endTime = Date.now();
+        saveMergeTasks();
+        sendToRenderer(task.status === 'completed' ? 'merge-completed' : 'merge-failed', { id, path: output, error: task.error, verified: task.verified });
+      }
+    })();
+    return { success: true, id, output, outputName: task.outputName, count: ordered.length, totalBytes, totalDuration: 0, codecWarning: '' };
   } catch (error) {
-    console.error('[Merge] 失败:', error.message);
     return { success: false, error: error.message };
   }
 });
@@ -1408,7 +1340,10 @@ ipcMain.handle('cancel-merge', async (event, id) => {
   if (!t) return { success: false, error: '任务不存在' };
   t.cancelled = true;
   if (t.child) {
-    try { t.child.kill(); } catch (_) {}
+    const child = t.child;
+    try { child.kill('SIGTERM'); } catch (_) {}
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch (_) {} }, 2000);
+    child.once('close', () => clearTimeout(timer));
   }
   return { success: true };
 });
@@ -1521,6 +1456,7 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
           vid_index: idx,
           title: ep.title || '',
           web_available: ep.web_available ?? null,
+          locked: ep.locked === true,
           taskId: t ? t.id : null,
           status,
           progress,
@@ -1833,6 +1769,8 @@ ipcMain.handle('prepare-online-play', async (event, payload) => {
   const session = { vid: key, requestId, requests: new Set(), entry: null };
   onlineSessions.set(streamId, session);
   try {
+    const checkedPlayInfo = key.startsWith('xifan:') ? await hongguo.fetchPlayUrlSingle(key, seriesId) : null;
+    if (checkedPlayInfo && !checkedPlayInfo.url) throw new Error(checkedPlayInfo.error || '来源未开放该集');
     let entry = onlineCache.get(key), cached = !!entry;
     if (!entry) {
       let job = onlinePreparing.get(key);
@@ -1840,7 +1778,7 @@ ipcMain.handle('prepare-online-play', async (event, payload) => {
         const controller = new AbortController();
         job = { controller };
         job.promise = (async () => {
-          const playInfo = await hongguo.fetchPlayUrlSingle(key, seriesId);
+          const playInfo = checkedPlayInfo || await hongguo.fetchPlayUrlSingle(key, seriesId);
           if (controller.signal.aborted) throw new Error('已取消播放');
           if (!playInfo?.url) throw new Error(playInfo?.error || '未获取到有效播放地址');
           const prepared = { size: 0, lastUsed: Date.now(), seriesId: String(seriesId || ''), vidIndex: Number(vidIndex) || 0 };
@@ -1990,8 +1928,16 @@ async function pickH264Encoder(ffmpegPath) {
  * 返回 { success, path, size, elapsed }
  */
 const compatPreparing = new Map();
-ipcMain.handle('transcode-for-playback', (event, payload = {}) => {
+ipcMain.handle('transcode-for-playback', async (event, payload = {}) => {
   if (!payload.seriesId || payload.vidIndex == null) return { success: false, error: '缺少剧集信息' };
+  if (String(payload.seriesId).startsWith('xifan:') || String(payload.vid).startsWith('xifan:')) {
+    try {
+      const current = await hongguo.fetchEpisodeList(payload.seriesId);
+      const episode = current.episodes.find(ep => Number(ep.vid_index) === Number(payload.vidIndex));
+      if (!episode || (payload.vid && payload.vid !== episode.vid)) return { success: false, error: '分集来源不匹配' };
+      if (episode.locked) return { success: false, error: '该集已锁定，请在来源平台解锁' };
+    } catch (error) { return { success: false, error: error.message }; }
+  }
   // Share work by actual destination, including force/retry requests while it is running.
   const key = compatPathFor(payload.seriesId, payload.vidIndex);
   if (compatPreparing.has(key)) return compatPreparing.get(key);
@@ -2139,13 +2085,24 @@ ipcMain.handle('decode-capability', async () => ({
  * 把若干集加入下载队列（批量下载与播放器「下载本集」共用）。
  * 返回新建的任务数。
  */
-function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
+async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
   if (!Array.isArray(episodes) || episodes.length === 0) return 0;
+  if (String(seriesId).startsWith('xifan:')) {
+    const current = await hongguo.fetchEpisodeList(seriesId);
+    episodes = episodes.map(requested => {
+      const ep = current.episodes.find(item => item.vid === requested.vid && Number(item.vid_index) === Number(requested.vid_index));
+      if (!ep) throw new Error('分集不属于所选来源，请重新打开剧集');
+      if (ep.locked) throw new Error('该集已锁定，请在来源平台解锁');
+      return ep;
+    });
+  } else if (episodes.some(ep => String(ep.vid).startsWith('xifan:'))) {
+    throw new Error('剧集来源不匹配');
+  }
 
   const settings = getCurrentSettings();
   const root = (settings.root && String(settings.root).trim()) ? String(settings.root).trim() : app.getPath('downloads');
   const cleanSeriesTitle = sanitizeFolderName(seriesTitle) || '红果短剧';
-  const downloadDir = path.join(root, '红果短剧', cleanSeriesTitle);
+  const downloadDir = seriesDownloadDir(root, seriesId, cleanSeriesTitle);
   try { fs.mkdirSync(downloadDir, { recursive: true }); } catch (_) {}
 
   const batchId = 'hongguobatch_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
@@ -2234,7 +2191,7 @@ ipcMain.handle('hongguo-download-batch', async (event, payload) => {
     if (!Array.isArray(episodes) || episodes.length === 0) {
       return { success: false, error: '未选择集数' };
     }
-    const count = enqueueEpisodes({ seriesId, seriesTitle, episodes });
+    const count = await enqueueEpisodes({ seriesId, seriesTitle, episodes });
     return { success: true, count, requested: episodes.length };
   } catch (error) {
     console.error('[Hongguo] 提交批量下载失败:', error.message);
@@ -2249,7 +2206,7 @@ ipcMain.handle('download-single-episode', async (event, seriesId, vidIndex) => {
     if (!entry) return { success: false, error: '未找到该剧档案，请先解析一次' };
     const ep = entry.episodes.find((e) => Number(e.vid_index) === Number(vidIndex));
     if (!ep) return { success: false, error: '未找到该集' };
-    const count = enqueueEpisodes({
+    const count = await enqueueEpisodes({
       seriesId: entry.series_id,
       seriesTitle: entry.series_title,
       episodes: [{ ...ep, cover: entry.cover }],

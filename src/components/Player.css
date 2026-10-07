@@ -596,3 +596,6 @@
 .player-header .btn-autonext-on { background: var(--accent-soft); border-color: transparent !important; }
 .player-now-status.status-downloading { background: var(--accent-soft); }
 @media (max-width: 1080px) { .player-header { flex-direction: column; gap: 15px; } .player-header-right { justify-content: flex-start; } .player-stat { flex-basis: auto; text-align: left; margin: 0 8px 0 0; } }
+
+.ep-chip:disabled { flex-direction: column; gap: 2px; cursor: not-allowed; background: var(--bg-inset); color: var(--text-secondary); }
+.ep-lock-label { display: block; font-size: 10px; line-height: 1.2; font-weight: 400; }

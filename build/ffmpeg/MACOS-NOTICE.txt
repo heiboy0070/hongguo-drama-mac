@@ -1,46 +1,45 @@
 FFmpeg / FFprobe for Apple Silicon macOS
 =======================================
 
-Version: 9.0.2-https://www.martin-riedl.de
-Build: macos/arm64/1789931890_9.0.2 (2026-09-20)
-Copyright (c) 2000-2026 the FFmpeg developers and respective library authors.
-License: GNU General Public License version 3 or later.
+This application uses separately invoked, source-built FFmpeg 9.0.2 and FFprobe
+9.0.2 executables. Copyright (c) 2000-2026 the FFmpeg developers and respective
+library authors. Combined build license: GNU GPL version 3 or later.
 
-Binary distributor and fixed download directory:
-  https://ffmpeg.martin-riedl.de/
-  https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/
+Only one external library is statically linked: x264, from the exact VideoLAN
+stable commit b35605ace3ddf7c1a5d67a2eb553f034aef41d55 (GPL version 2 or later).
+FFmpeg and x264 sources are unmodified. No nonfree configuration is enabled.
+The only dynamically linked components are macOS system libraries/frameworks.
+No Homebrew codec library is linked. Minimum system version: macOS 13.0.
 
-The build includes --enable-gpl --enable-version3 and does NOT include
---enable-nonfree. Both programs report GPL version 3 or later with -L.
-It contains libx264 and Apple's VideoToolbox support. Non-system codec libraries
-are statically linked. otool -L showed only /usr/lib and /System/Library paths.
-The application invokes these separate executables; their source is unmodified.
+Exact source inputs:
+  https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+  SHA256: 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+  https://code.videolan.org/videolan/x264.git
+  Commit: b35605ace3ddf7c1a5d67a2eb553f034aef41d55
+  Deterministic git archive tar + gzip -n SHA256:
+  4f1c35d11c7b09ca1a88affb914e1fc3daee888732786a66e51af4f786962c44
 
-Archive SHA256 (verified against distributor's .zip.sha256 files):
-  ffmpeg.zip  c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924
-  ffprobe.zip fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6
+Rebuild instructions: scripts/build-ffmpeg-source-mac.sh BUILD_DIRECTORY [JOBS].
+The corresponding-source archive accompanies the application's binary release:
+original source archives, exact build script, source manifest and license texts.
+The script verifies source hashes before compiling. It needs existing Apple
+Command Line Tools, make, git, curl and pkg-config; it installs no dependencies.
+It disables external-library autodetection and isolates pkg-config to the local
+x264 build prefix. Compilation writes only inside BUILD_DIRECTORY.
 
-Original executable SHA256 (before app packaging re-signs the executables):
-  ffmpeg  2e11c6f90993cdb79fff84d3f90044d28316b310e75b3e030cfc9a54f2c9d384
-  ffprobe 2738aa46a7f9acbc8ab09a6715554c90f7de603171ac403726765685df6a0059
+Capabilities retained: local CENC decryption, H.264/HEVC/AAC decoding, MP4,
+VideoToolbox H.264 hardware encoding, libx264 software encoding, concat/copy,
+built-in audio/video conversion filters. Network protocols and device capture
+are disabled; the application handles network downloads itself. lavfi remains
+available for synthetic black-frame acceptance tests. No ffplay is shipped.
 
-License text: COPYING.GPLv3 and MACOS-LICENSE.txt in this directory.
-Complete configuration and dependency versions: MACOS-VERSIONS.txt.
-The FFmpeg license notice credits the Independent JPEG Group (IJG); the
-application does not modify the IJG-derived FFmpeg source files.
+License texts: MACOS-LICENSE.txt (GPLv3), MACOS-X264-LICENSE.txt (GPLv2).
+Additional upstream license texts and notices are in the corresponding source.
+FFmpeg retains its Independent JPEG Group (IJG) attribution and unmodified code.
 
-Source and build instructions:
-  FFmpeg 9.0.2: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
-  FFmpeg tag: https://github.com/FFmpeg/FFmpeg/tree/n9.0.2
-  Build scripts: https://git.martin-riedl.de/ffmpeg/build-script
-  The release build uses the main branch of those scripts. See its README for
-  source download locations, build tools, and build options; exact dependency
-  versions supplied with these binaries are recorded in MACOS-VERSIONS.txt.
-
-Publishing this application's source does not publish these ignored binaries.
-Before distributing compiled packages to third parties, the distributor must
-also make available the complete corresponding source of the GPL components,
-including the exact linked dependencies and build scripts, as required by GPLv3
-section 6. Source URL pointers alone are not a complete source distribution.
+Executable hashes below are for the standalone build before application-package
+Developer ID signing, which changes Mach-O signature data and file hashes:
+  ffmpeg: 5778f11dcf417fbefc1912026159a31db157953078abd5d6fec5ba29dd91eb06
+  ffprobe: 0b13c76cad68528c12acd81e6e7672f929a0311e06847111a3079c8ac4046c22
 
 The Windows FFmpeg build retains its own FFMPEG-NOTICE.txt.

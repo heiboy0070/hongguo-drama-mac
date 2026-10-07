@@ -37,7 +37,7 @@ function HongguoDownload({ onNavigate }) {
     setErrorMsg('');
     setTab('input');
     setSeriesData(data);
-    setSelectedVids(new Set(data.episodes.map((ep) => ep.vid)));
+    setSelectedVids(new Set(data.episodes.filter((ep) => !ep.locked).map((ep) => ep.vid)));
     setSuccessMsg(`已选中《${data.series_title}》共 ${data.total} 集，可直接提交下载`);
     document.querySelector('.main-content')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -62,7 +62,7 @@ function HongguoDownload({ onNavigate }) {
       if (res?.success && res.data) {
         setSeriesData(res.data);
         // 默认全选，网页未提供的集数自动尝试 App 片源。
-        const allVids = new Set(res.data.episodes.map((ep) => ep.vid));
+        const allVids = new Set(res.data.episodes.filter((ep) => !ep.locked).map((ep) => ep.vid));
         setSelectedVids(allVids);
         setSuccessMsg(`解析成功！找到《${res.data.series_title}》共 ${res.data.total} 集`);
       } else {
@@ -77,6 +77,7 @@ function HongguoDownload({ onNavigate }) {
 
   // 勾选/取消勾选单集
   const toggleVid = (vid) => {
+    if (!seriesData?.episodes.some((ep) => ep.vid === vid && !ep.locked)) return;
     const next = new Set(selectedVids);
     if (next.has(vid)) {
       next.delete(vid);
@@ -89,7 +90,7 @@ function HongguoDownload({ onNavigate }) {
   // 全选
   const handleSelectAll = () => {
     if (!seriesData) return;
-    setSelectedVids(new Set(seriesData.episodes.map((ep) => ep.vid)));
+    setSelectedVids(new Set(seriesData.episodes.filter((ep) => !ep.locked).map((ep) => ep.vid)));
   };
 
   // 反选
@@ -97,7 +98,7 @@ function HongguoDownload({ onNavigate }) {
     if (!seriesData) return;
     const next = new Set();
     for (const ep of seriesData.episodes) {
-      if (!selectedVids.has(ep.vid)) {
+      if (!ep.locked && !selectedVids.has(ep.vid)) {
         next.add(ep.vid);
       }
     }
@@ -122,7 +123,7 @@ function HongguoDownload({ onNavigate }) {
     } else if (type === 'last30') {
       targetEps = eps.slice(Math.max(0, total - 30));
     }
-    setSelectedVids(new Set(targetEps.map((ep) => ep.vid)));
+    setSelectedVids(new Set(targetEps.filter((ep) => !ep.locked).map((ep) => ep.vid)));
   };
 
   // 根据区间字符串应用筛选 (如 "1-30" 或 "1,5,10-20")
@@ -145,7 +146,7 @@ function HongguoDownload({ onNavigate }) {
         if (!isNaN(n) && n >= 1 && n <= total) nums.add(n);
       }
     }
-    const selectedEps = seriesData.episodes.filter((ep) => nums.has(ep.vid_index));
+    const selectedEps = seriesData.episodes.filter((ep) => !ep.locked && nums.has(ep.vid_index));
     setSelectedVids(new Set(selectedEps.map((ep) => ep.vid)));
   };
 
@@ -159,7 +160,7 @@ function HongguoDownload({ onNavigate }) {
     setErrorMsg('');
     setSuccessMsg('');
     try {
-      const selectedEps = seriesData.episodes.filter((ep) => selectedVids.has(ep.vid));
+      const selectedEps = seriesData.episodes.filter((ep) => !ep.locked && selectedVids.has(ep.vid));
       const res = await window.electronAPI.hongguoDownloadBatch({
         seriesId: seriesData.series_id,
         seriesTitle: seriesData.series_title,
@@ -274,6 +275,7 @@ function HongguoDownload({ onNavigate }) {
               <div className="series-meta">
                 <h3 className="series-title">《{seriesData.series_title}》</h3>
                 <div className="series-tags">
+                  <span className="badge">{String(seriesData.series_id).startsWith('xifan:') ? '西饭短剧' : '红果短剧'}</span>
                   <span className="badge">共 {seriesData.total} 集</span>
                   <span className="badge badge-secondary">已选 {selectedVids.size} 集</span>
                 </div>
@@ -301,6 +303,8 @@ function HongguoDownload({ onNavigate }) {
           {seriesData.web_accessible_episodes != null && seriesData.web_accessible_episodes < seriesData.total && (
             <p className="settings-hint">网页源提供前 {seriesData.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</p>
           )}
+
+          {seriesData.episodes.some((ep) => ep.locked) && <p className="settings-hint">锁定集需在来源平台解锁，本应用不提供解锁；全选和范围选择会自动跳过。</p>}
 
           {/* 筛选与操作栏 */}
           <div className="controls-row">
@@ -336,6 +340,8 @@ function HongguoDownload({ onNavigate }) {
               return (
                 <button
                   type="button"
+                  disabled={ep.locked === true}
+                  title={ep.locked ? '需在来源平台解锁' : undefined}
                   aria-pressed={isChecked}
                   key={ep.vid}
                   className={`episode-card ${isChecked ? 'selected' : ''}`}
@@ -346,7 +352,7 @@ function HongguoDownload({ onNavigate }) {
                   </div>
                   <div className="episode-info">
                     <span className="episode-num">第 {String(ep.vid_index).padStart(2, '0')} 集</span>
-                    {ep.title && <span className="episode-title">{ep.title}</span>}
+                    {ep.locked ? <span className="episode-title">锁定 · 需在来源解锁</span> : ep.title && <span className="episode-title">{ep.title}</span>}
                   </div>
                 </button>
               );

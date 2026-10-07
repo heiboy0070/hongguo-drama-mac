@@ -61,3 +61,6 @@ progress.md
 HANDOFF.md
 graphify-out/
 红果视频刷访问量/
+
+# Local signed release output
+dist-signed/

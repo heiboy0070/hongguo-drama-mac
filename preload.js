@@ -11,9 +11,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hongguoDownloadBatch: (payload) => ipcRenderer.invoke('hongguo-download-batch', payload),
 
   // 搜索（内嵌浏览器嗅探）
-  searchSeries: (keyword) => ipcRenderer.invoke('search-series', keyword),
+  searchSeries: (keyword, options) => ipcRenderer.invoke('search-series', keyword, options),
   searchResolve: (seriesId) => ipcRenderer.invoke('search-resolve', seriesId),
-  searchWindowShow: (visible) => ipcRenderer.invoke('search-window-show', visible),
+  searchWindowShow: (visible, sourceUrl) => ipcRenderer.invoke('search-window-show', visible, sourceUrl),
   getSeriesList: () => ipcRenderer.invoke('get-series-list'),
   removeSeries: (seriesId) => ipcRenderer.invoke('remove-series', seriesId),
   purgeEmptySeries: () => ipcRenderer.invoke('purge-empty-series'),

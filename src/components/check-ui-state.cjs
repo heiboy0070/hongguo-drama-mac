@@ -10,6 +10,8 @@ const ok = data => ({ success: true, data });
 
 function mount(file, api, props = {}) {
   const slots = [], effects = [], cleanups = [];
+  const timers = new Map();
+  let timerId = 0;
   let cursor = 0, tree, Component;
   const changed = (old, deps) => !old || deps.some((d, i) => !Object.is(d, old[i]));
   const react = {
@@ -23,7 +25,7 @@ function mount(file, api, props = {}) {
   const fallback = () => Promise.resolve({});
   const window = { electronAPI: new Proxy(api, { get: (obj, key) => obj[key] || (key.startsWith('on') ? () => () => {} : fallback) }), addEventListener() {}, removeEventListener() {} };
   const source = transformSync(fs.readFileSync(`${__dirname}/${file}.jsx`, 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
-  const context = { module: { exports: {} }, exports: {}, require: name => name === 'react' ? react : name === './useDialogKeyboard' ? () => {} : {}, window, document: { querySelector: () => null }, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}, console };
+  const context = { module: { exports: {} }, exports: {}, require: name => name === 'react' ? react : name === './useDialogKeyboard' ? () => {} : {}, window, document: { querySelector: () => null }, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout: id => timers.delete(id), setInterval: () => 1, clearInterval() {}, console };
   context.exports = context.module.exports;
   vm.runInNewContext(source, context);
   Component = context.module.exports.default;
@@ -34,7 +36,8 @@ function mount(file, api, props = {}) {
   const button = label => find(n => n.type === 'button' && text(n).includes(label));
   const flush = async () => { for (let i = 0; i < 30; i++) { await Promise.resolve(); render(); } };
   render();
-  return { render, flush, find, button, text: () => text(tree), unmount: () => cleanups.forEach(fn => fn?.()) };
+  const advanceTimers = (ms) => { for (const [id, timer] of [...timers]) if (timer.delay <= ms) { timers.delete(id); timer.fn(); } };
+  return { render, flush, find, button, advanceTimers, text: () => text(tree), unmount: () => cleanups.forEach(fn => fn?.()) };
 }
 
 (async () => {
@@ -111,6 +114,104 @@ function mount(file, api, props = {}) {
     // React does not rerender when setTab receives the same value.
     searchResult(detail('A')); ui.render();
     assert.ok(ui.text().includes('《A》')); ui.unmount();
+  });
+  await test('browse categories: comic then real returns cached cards and ignores late comic', async () => {
+    const pendingComic = deferred(); let realCalls = 0;
+    const list = title => ({ success: true, results: [{ series_id: title, series_title: title }], totalPages: 1 });
+    const ui = mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [{ slug: 'real-drama', label: '真人剧' }, { slug: 'comic', label: '漫画' }], browseList: async p => p.category === 'comic' ? pendingComic.promise : p.category === 'comic-drama' ? list('动态漫剧') : (realCalls++, list('真人缓存')) });
+    await ui.flush(); ui.button('漫画').props.onClick(); await ui.flush();
+    ui.button('真人剧').props.onClick();
+    pendingComic.resolve({ success: true, results: [], unsupported: true, emptyMessage: '这里是图文漫画，暂不支持视频下载；看动态漫画请切换“漫剧”。' }); await Promise.resolve(); await Promise.resolve(); await ui.flush();
+    assert.equal(realCalls, 1, 'switching back must not queue another request behind comic');
+    assert.ok(ui.text().includes('真人缓存')); assert.ok(!ui.text().includes('这里是图文漫画'));
+    ui.button('漫画').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('这里是图文漫画，暂不支持视频下载'));
+    assert.ok(!ui.text().includes('暂时没能加载剧集'));
+    ui.button('查看漫剧').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('动态漫剧')); ui.unmount();
+  });
+  await test('browse categories: timeout ends skeleton and retry rejects the old response', async () => {
+    const pending = deferred(); let calls = 0;
+    const ui = mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: () => ++calls === 1 ? pending.promise : Promise.resolve({ success: true, results: [{ series_id: 'retry', series_title: '重试成功' }] }) });
+    await ui.flush(); ui.advanceTimers(30000); await ui.flush();
+    assert.ok(ui.text().includes('超时'), 'hanging IPC must become a visible timeout');
+    assert.equal(ui.find(n => n.props.className === 'browse-loading-state'), undefined);
+    ui.button('重新加载').props.onClick(); await ui.flush();
+    pending.resolve({ success: true, results: [{ series_id: 'old', series_title: '旧片单' }] }); await ui.flush();
+    assert.ok(ui.text().includes('重试成功')); assert.ok(!ui.text().includes('旧片单')); ui.unmount();
+  });
+  await test('browse categories: cancel is immediate and cached cards survive refresh errors', async () => {
+    const pending = deferred(); let calls = 0;
+    const ui = mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: () => ++calls === 1 ? Promise.resolve({ success: true, results: [{ series_id: 'saved', series_title: '已加载片单' }] }) : pending.promise });
+    await ui.flush(); const refresh = ui.button('刷新片单'); assert.ok(refresh, 'cached results need an explicit refresh'); refresh.props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('已加载片单'));
+    const cancel = ui.button('取消加载'); assert.ok(cancel, 'loading must remain cancellable'); cancel.props.onClick(); ui.render();
+    assert.ok(ui.text().includes('已取消')); assert.ok(ui.text().includes('已加载片单'));
+    pending.resolve({ success: false, error: '来源不可用' }); await ui.flush();
+    assert.ok(!ui.text().includes('来源不可用'), 'cancelled request must not overwrite cancellation');
+    ui.button('重新加载').props.onClick(); await ui.flush();
+    assert.ok(ui.text().includes('来源不可用')); assert.ok(ui.text().includes('已加载片单')); ui.unmount();
+  });
+
+  await test('xifan browse source switch rejects late lists and opens the current source URL', async () => {
+    const old = deferred(), opened = [], pages = []; let calls = 0;
+    const ui = mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: p => p.source === 'xifan' ? (pages.push(p.page), Promise.resolve({ success: true, results: [{ series_id: 'X', series_title: '西饭片单' }], genres: [{ slug: '68', label: '都市' }], total: 0, totalPages: 0, hasMore: p.page === 1 })) : ++calls === 1 ? Promise.resolve({ success: true, results: [{ series_id: 'H', series_title: '红果片单' }], sourceUrl: 'https://www.hongguoduanju.com/category/real-drama' }) : old.promise, searchWindowShow: async (...args) => opened.push(args) });
+    await ui.flush(); await ui.button('打开来源页面').props.onClick();
+    assert.equal(opened[0][1], 'https://www.hongguoduanju.com/category/real-drama');
+    ui.button('刷新片单').props.onClick(); ui.render();
+    const source = ui.find(n => n.props['aria-label'] === '短剧来源'); assert.ok(source, 'source selector missing');
+    source.props.onChange({ target: { value: 'xifan' } }); await ui.flush();
+    old.resolve({ success: true, results: [{ series_id: 'late', series_title: '旧红果片单' }] }); await ui.flush();
+    assert.ok(ui.text().includes('西饭片单')); assert.ok(!ui.text().includes('旧红果片单'));
+    assert.equal(ui.button('打开来源页面'), undefined); assert.ok(ui.button('都市'));
+    ui.button('下一页').props.onClick(); await ui.flush(); assert.equal(pages.at(-1), 2); assert.equal(ui.button('下一页').props.disabled, true); assert.ok(ui.text().includes('第 2 页'));
+    ui.button('上一页').props.onClick(); await ui.flush(); assert.ok(ui.text().includes('第 1 页')); ui.unmount();
+  });
+  await test('xifan search source change ignores late searches and detail picks', async () => {
+    const old = deferred(), pick = deferred(), picked = []; const calls = [];
+    const ui = mount('SearchPanel', { searchSeries: (kw, options) => { calls.push(options); return options?.source === 'xifan' ? Promise.resolve({ success: true, results: [{ series_id: 'X', series_title: '西饭搜索' }] }) : old.promise; }, searchResolve: () => pick.promise }, { onSelectSeries: d => picked.push(d) });
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '剧名' } }); ui.render(); ui.button('搜索').props.onClick(); ui.render();
+    const source = ui.find(n => n.props['aria-label'] === '短剧来源'); assert.ok(source, 'source selector missing');
+    source.props.onChange({ target: { value: 'xifan' } }); ui.render(); ui.button('搜索').props.onClick(); await ui.flush();
+    old.resolve({ success: true, results: [{ series_id: 'H', series_title: '旧搜索' }] }); await ui.flush();
+    assert.ok(ui.text().includes('西饭搜索')); assert.ok(!ui.text().includes('旧搜索'));
+    ui.find(n => n.props.className?.startsWith('search-card ')).props.onClick(); ui.render();
+    ui.find(n => n.props['aria-label'] === '短剧来源').props.onChange({ target: { value: 'hongguo' } }); ui.render();
+    pick.resolve(ok(detail('X'))); await ui.flush(); assert.equal(picked.length, 0); assert.equal(calls[0].source, 'hongguo'); ui.unmount();
+  });
+  await test('xifan locked episodes are excluded from every download selection', async () => {
+    const data = detail('xifan:test:A'); data.episodes[0].locked = true; let submitted;
+    const ui = mount('HongguoDownload', { hongguoDownloadBatch: async p => { submitted = p; return { success: true, count: p.episodes.length }; } });
+    ui.find(n => n.props.onSelectSeries).props.onSelectSeries(data); ui.render();
+    assert.ok(ui.button('下载选中集数 (1/2)'), 'default must exclude locked');
+    for (const label of ['全选', '前 10 集', '前 30 集', '后 30 集']) { ui.button(label).props.onClick(); ui.render(); assert.ok(ui.button('下载选中集数 (1/2)'), label); }
+    ui.button('反选').props.onClick(); ui.render(); assert.ok(ui.button('下载选中集数 (0/2)'));
+    ui.find(n => n.props['aria-label'] === '选择集数范围').props.onChange({ target: { value: '1-2' } }); ui.render(); ui.button('应用').props.onClick(); ui.render();
+    assert.ok(ui.button('下载选中集数 (1/2)')); assert.ok(ui.find(n => n.props.className?.startsWith('episode-card') && n.props.disabled));
+    await ui.button('下载选中集数').props.onClick(); assert.equal(submitted.episodes.length, 1); assert.equal(submitted.episodes[0].vid_index, 2); ui.unmount();
+  });
+  await test('xifan browse locks selection and starts the first unlocked episode', async () => {
+    const data = detail('X'); data.episodes[0].locked = true; let played, submitted;
+    const ui = mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: async () => ({ success: true, results: [{ series_id: 'X', series_title: 'X' }] }), searchResolve: async () => ok(data), getSeriesEpisodes: async () => ok(data), playSeries: async p => { played = p; return { success: false }; }, hongguoDownloadBatch: async p => { submitted = p; return { success: false }; } });
+    await ui.flush(); ui.find(n => n.props.className === 'browse-card').props.onClick(); await ui.flush();
+    assert.ok(ui.button('下载选中 (1)')); ui.button('全选').props.onClick(); ui.render(); assert.ok(ui.button('下载选中 (1)'));
+    ui.find(n => n.props['aria-label'] === '选择集数范围').props.onChange({ target: { value: '1-2' } }); ui.render(); ui.button('应用').props.onClick(); ui.render(); assert.ok(ui.button('下载选中 (1)'));
+    await ui.button('立即播放').props.onClick(); assert.equal(played.vidIndex, 2);
+    await ui.button('下载选中').props.onClick(); assert.equal(submitted.episodes.length, 1); assert.equal(submitted.episodes[0].vid_index, 2); ui.unmount();
+  });
+  await test('xifan player skips locked episodes in auto next and download missing', async () => {
+    const data = detail('X'); data.total = 3; data.episodes.push(episode(3)); data.episodes[1].locked = true;
+    const requested = [], downloaded = [];
+    const ui = mount('Player', { getSeriesList: async () => [{ series_id: 'X' }], getSeriesEpisodes: async () => ok(data), getPlaybackPosition: async () => null, prepareOnlinePlay: async p => { requested.push(p); return { success: true, url: `hongguo-stream://${p.vidIndex}` }; }, downloadSingleEpisode: async (sid, n) => { downloaded.push(n); return { success: true, count: 1 }; } }, { target: { seriesId: 'X', vidIndex: 1, ts: 1 } });
+    await ui.flush(); const locked = ui.find(n => n.props['aria-label'] === '第 2 集'); assert.equal(locked.props.disabled, true);
+    locked.props.onClick(); await ui.flush(); assert.equal(requested.length, 1, 'handler must also guard locked');
+    ui.find(n => n.type === 'video').props.onEnded(); await ui.flush(); assert.equal(requested.at(-1).vidIndex, 3);
+    await ui.button('下载未完成集').props.onClick(); assert.deepEqual(downloaded, [1, 3]); ui.unmount();
+  });
+  await test('xifan merge progress retains completed episode count', async () => {
+    let update;
+    const ui = mount('DownloadManager', { getDownloadTasks: async () => [], getSeriesList: async () => [], getMergeTasks: async () => [{ id: 'm', seriesTitle: '合并', total: 72, done: 0, progress: 0, status: 'running' }], onMergeProgress: fn => { update = fn; return () => {}; } });
+    await ui.flush(); update({ id: 'm', progress: 35, done: 24 }); ui.render(); assert.ok(ui.text().includes('24/72 集')); ui.unmount();
   });
   process.exitCode = failures ? 1 : 0;
 })();

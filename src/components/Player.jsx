@@ -230,7 +230,7 @@ function Player({ target, onNavigate }) {
       const { waitingFor: wf } = stateRef.current;
       if (wf != null) {
         const ep = d.episodes.find((e) => e.vid_index === wf);
-        if (ep && ep.status === 'completed') {
+        if (ep && !ep.locked && ep.status === 'completed') {
           // 等待中的下一集下好了 -> 自动切过去
           setWaitingFor(null);
           resetPlayback();
@@ -254,7 +254,7 @@ function Player({ target, onNavigate }) {
   const startCompatPlay = useCallback(
     async (vidIndex) => {
       const ep = episodes.find((e) => e.vid_index === vidIndex);
-      if (!ep) return;
+      if (!ep || ep.locked) return;
       const request = { seriesId: String(activeSeriesId), vidIndex, version: mediaVersion.current };
       if (compatRequestRef.current?.version === request.version && compatRequestRef.current?.vidIndex === vidIndex) return;
       compatRequestRef.current = request;
@@ -327,6 +327,7 @@ function Player({ target, onNavigate }) {
   const startOnlinePlay = useCallback(
     async (vidIndex) => {
       const ep = episodes.find((e) => e.vid_index === vidIndex);
+      if (ep?.locked) { showToast('这一集需在来源平台解锁'); return; }
       if (!ep || !ep.vid) {
         showToast('这一集暂时无法播放，请重新获取剧集后重试');
         return;
@@ -378,7 +379,7 @@ function Player({ target, onNavigate }) {
   const goToEpisode = useCallback(
     (vidIndex) => {
       const ep = episodes.find((e) => e.vid_index === vidIndex);
-      if (!ep) return;
+      if (!ep || ep.locked) return;
       if (ep.status !== 'completed' || !ep.fileUrl) {
         startOnlinePlay(vidIndex);
         return;
@@ -396,7 +397,7 @@ function Player({ target, onNavigate }) {
     (fromIndex) => {
       const idx = episodes.findIndex((e) => e.vid_index === fromIndex);
       if (idx === -1 || idx + 1 >= episodes.length) return null;
-      return episodes[idx + 1];
+      return episodes.slice(idx + 1).find((ep) => !ep.locked) || null;
     },
     [episodes]
   );
@@ -404,7 +405,7 @@ function Player({ target, onNavigate }) {
     (fromIndex) => {
       const idx = episodes.findIndex((e) => e.vid_index === fromIndex);
       if (idx <= 0) return null;
-      return episodes[idx - 1];
+      return episodes.slice(0, idx).reverse().find((ep) => !ep.locked) || null;
     },
     [episodes]
   );
@@ -428,7 +429,7 @@ function Player({ target, onNavigate }) {
     if (!an) return;
     const next = findNext(ci);
     if (!next) {
-      showToast('已经是最后一集');
+      showToast(episodes.some((ep) => ep.locked) ? '已播完可播放集数，其余集数需在来源平台解锁' : '已经是最后一集');
       return;
     }
     if (sid) window.electronAPI.savePlaybackPosition(sid, next.vid_index, 0);
@@ -459,7 +460,7 @@ function Player({ target, onNavigate }) {
   // 切集 / 恢复断点
   useEffect(() => {
     const v = videoRef.current;
-    if (!v || !current || current.status !== 'completed') return;
+    if (!v || !current || current.locked || current.status !== 'completed') return;
     const seekTo = pendingSeekRef.current || 0;
     const onLoaded = () => {
       if (seekTo > 0 && seekTo < v.duration - 3) {
@@ -521,9 +522,9 @@ function Player({ target, onNavigate }) {
       const saved = requestedIndex ? null : await window.electronAPI.getPlaybackPosition(sid);
       if (version !== selectionVersion.current) return;
       const wantedIndex = requestedIndex || saved?.vid_index;
-      const selected = d.episodes.find(e => e.vid_index === wantedIndex) || d.episodes[0];
+      const selected = d.episodes.find(e => e.vid_index === wantedIndex && !e.locked) || d.episodes.find(e => !e.locked);
       setCurrentIndex(selected?.vid_index || 1);
-      pendingSeekRef.current = saved?.currentTime || 0;
+      pendingSeekRef.current = selected?.vid_index === saved?.vid_index ? saved.currentTime || 0 : 0;
       if (requestedIndex && selected && selected.status !== 'completed') {
         pendingTargetRef.current = { seriesId: String(sid), vidIndex: selected.vid_index };
       }
@@ -613,6 +614,7 @@ function Player({ target, onNavigate }) {
   };
 
   const downloadEpisode = async (vidIndex) => {
+    if (!episodes.some((ep) => ep.vid_index === vidIndex && !ep.locked)) return;
     const res = await window.electronAPI.downloadSingleEpisode(activeSeriesId, vidIndex);
     if (res && res.success) {
       showToast(res.count > 0 ? `第 ${vidIndex} 集已加入下载队列` : `第 ${vidIndex} 集已在队列中`);
@@ -623,9 +625,9 @@ function Player({ target, onNavigate }) {
   };
 
   const downloadMissing = async () => {
-    const missing = episodes.filter((e) => e.status !== 'completed');
+    const missing = episodes.filter((e) => !e.locked && e.status !== 'completed');
     if (!missing.length) {
-      showToast('全部已下载');
+      showToast('可下载的集数已全部下载');
       return;
     }
     let ok = 0;
@@ -700,7 +702,7 @@ function Player({ target, onNavigate }) {
   // 可播放：本地已下载走 file://，否则走在线内存流；兼容模式下优先用转码后的文件
   const compatUrl = current ? compatMap[current.vid_index] : null;
   const isOnlinePlaying = onlineVid && current && current.vid === onlineVid && onlineUrl;
-  const canPlay = !!(current && (compatUrl || (current.status === 'completed' && current.fileUrl) || isOnlinePlaying));
+  const canPlay = !!(current && !current.locked && (compatUrl || (current.status === 'completed' && current.fileUrl) || isOnlinePlaying));
   const videoSrc = compatUrl || (isOnlinePlaying ? onlineUrl : (current && current.fileUrl) || '');
 
   return (
@@ -982,6 +984,8 @@ function Player({ target, onNavigate }) {
                 })()}
                 <span className="player-placeholder-sub">也可以直接在线播放这一集</span>
               </>
+            ) : current?.locked || (episodes.length > 0 && episodes.every((ep) => ep.locked)) ? (
+              <><Film size={34} /><p>需在来源平台解锁后观看</p><span className="player-placeholder-sub">本应用不提供解锁</span></>
             ) : current ? (
               <>
                 <Film size={34} />
@@ -1065,7 +1069,7 @@ function Player({ target, onNavigate }) {
           </span>
           {current.title && <span className="player-now-sub">{current.title}</span>}
           <span className={`player-now-status status-${current.status}`}>
-            {current.status === 'completed' ? '可播放' : current.status === 'downloading' ? `下载中 ${current.progress || 0}%` : current.status === 'pending' ? '排队中' : '未下载'}
+            {current.locked ? '锁定' : current.status === 'completed' ? '可播放' : current.status === 'downloading' ? `下载中 ${current.progress || 0}%` : current.status === 'pending' ? '排队中' : '未下载'}
           </span>
         </div>
       )}
@@ -1074,6 +1078,8 @@ function Player({ target, onNavigate }) {
         <p className="player-tips">网页源提供前 {detail.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</p>
       )}
 
+      {episodes.some((ep) => ep.locked) && <p className="player-tips">锁定集需在来源平台解锁，本应用不提供解锁；连播会跳过锁定集。</p>}
+
       {/* 分集列表 */}
       <div className="player-episodes">
         {episodes.map((ep) => {
@@ -1081,12 +1087,13 @@ function Player({ target, onNavigate }) {
           return (
             <button
               key={ep.vid_index}
+              disabled={ep.locked === true}
               aria-label={`第 ${ep.vid_index} 集`}
               aria-pressed={isCurrent}
               className={`ep-chip ep-${ep.status} ${isCurrent ? 'ep-current' : ''}`}
               onClick={() => goToEpisode(ep.vid_index)}
               title={
-                ep.status === 'completed'
+                ep.locked ? '需在来源平台解锁' : ep.status === 'completed'
                   ? '点击播放（本地）'
                   : ep.status === 'downloading' || ep.status === 'pending'
                   ? '下载继续，点击在线播放'
@@ -1094,7 +1101,7 @@ function Player({ target, onNavigate }) {
               }
               onDoubleClick={() => ep.status !== 'completed' && downloadEpisode(ep.vid_index)}
             >
-              <span className="ep-num">{ep.vid_index}</span>
+              <span className="ep-num">{ep.vid_index}</span>{ep.locked && <span className="ep-lock-label">锁定</span>}
               {ep.status === 'completed' && <Check size={11} className="ep-badge" />}
               {ep.status === 'downloading' && (
                 <span className="ep-progress" style={{ width: `${ep.progress || 0}%` }} />
@@ -1108,7 +1115,7 @@ function Player({ target, onNavigate }) {
       <div className="player-tips">
         快捷键：空格 播放/暂停 · ← → 快退/快进 5 秒 · ↑ ↓ 上一集/下一集 · A 切换连播。
         <br />
-        <b>灰色分集点一下即可在线播放</b>（不保存到下载目录）；双击才加入下载队列。
+        <b>未锁定的灰色分集点一下即可在线播放</b>（不保存到下载目录）；双击才加入下载队列。
         连播时遇到未下载的集会自动转在线播放。
       </div>
 

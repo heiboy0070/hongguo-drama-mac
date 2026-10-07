@@ -71,8 +71,8 @@ Electron 更新至 44.6.0，electron-builder 更新至 26.15.3。
 
 Mac 内置 FFmpeg 为 GPLv3-or-later 的独立 arm64 构建，详见
 build/ffmpeg/MACOS-NOTICE.txt、MACOS-VERSIONS.txt、MACOS-LICENSE.txt。
-应用仅作本地 ad-hoc 签名，未使用 Developer ID，未申请 Apple 公证。
-源码发布不意味着编译包发布；发布二进制仍须提供完整对应源码。
+本地默认构建使用 ad-hoc 签名；正式发行的签名和 Apple 公证状态以相应 Release 为准。
+二进制发行同时提供应用源码与 FFmpeg/x264 完整对应源码和构建材料。
 
 七、App 片源补充（1.1.2，2026-10-07）
 -----------------------------------
@@ -81,3 +81,11 @@ build/ffmpeg/MACOS-NOTICE.txt、MACOS-VERSIONS.txt、MACOS-LICENSE.txt。
 具体提交、修改与许可全文见 src/native/licenses/。使用本地临时访客参数，
 不包含上游固定设备 ID、账号 Cookie 或第三方签名服务。
 新片源通过内置 FFmpeg 解密，选择受支持编码，保留原网页及旧接口路径。
+
+八、1.1.3 稳定性及独立来源（2026-10-07）
+---------------------------------------
+分类目录改为独立限时请求，避免漫画页阻塞后续分类；图文漫画明确标注不支持视频。
+混合编码分集合并前逐集标准化；硬件编码失败可整轮回退软件编码。
+新增西饭独立来源，保留服务端锁定状态，不请求解锁或广告奖励接口。
+来源接口参考 Hululu007/drpy-node 的接口路径与公开返回结构，适配器独立编写。
+Mac FFmpeg 改为固定 FFmpeg 9.0.2 与 x264 b35605a 自行源码构建。

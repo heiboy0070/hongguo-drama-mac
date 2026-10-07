@@ -51,7 +51,8 @@ FFmpeg 是独立的第三方程序，本软件仅通过命令行调用其公开�
 
 ### Mac FFmpeg / FFprobe（GPLv3-or-later）
 
-Apple Silicon 包内置 Martin Riedl 9.0.2 arm64 构建，文件位于 `Contents/Resources/bin/`。
+Apple Silicon 包内置从未修改源码编译的 FFmpeg 9.0.2 与 x264 b35605ace3ddf7c1a5d67a2eb553f034aef41d55，文件位于 `Contents/Resources/bin/`。
+x264 是唯一非系统静态依赖（GPLv2-or-later），整体构建为 GPLv3-or-later；完整对应源码与准确构建脚本随 Release 提供。
 准确来源、版本、构建配置及对应源码要求见 `build/ffmpeg/MACOS-NOTICE.txt`、
 `MACOS-VERSIONS.txt` 和 `MACOS-LICENSE.txt`。
 
@@ -78,3 +79,8 @@ Apple Silicon 包内置 Martin Riedl 9.0.2 arm64 构建，文件位于 `Contents
 
 改编自 woshishiq1/drpys，经 N3urda/hongguoTV 的 vendor 源码核对，GPL-3.0。
 完整来源与修改说明见 `src/native/licenses/NOTICE.txt`，许可见同目录 `LICENSE.drpys.txt`。
+
+## 西饭接口参考
+
+独立编写适配器；接口路径核对参考 [Hululu007/drpy-node](https://github.com/Hululu007/drpy-node/tree/295f2b7047e14122d542a7736cb931e81abcf85c)（GPL-3.0）。
+未复制其中的会话标识或解锁流程。公开接口可访问不代表作品获得再分发授权；安装包不包含剧集媒体。
