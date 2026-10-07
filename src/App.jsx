@@ -16,6 +16,8 @@ const MENU = [
 
 export default function App() {
   const [page, setPage] = useState('browse');
+  const [visited, setVisited] = useState(['browse']);
+  const [storageError, setStorageError] = useState('');
   const [appInfo, setAppInfo] = useState(null); // { version, brand, appName }
   const [playerTarget, setPlayerTarget] = useState(null); // 浏览页点播 -> 播放页选中
 
@@ -25,34 +27,39 @@ export default function App() {
     });
   }, []);
 
+  useEffect(() => window.electronAPI.onStorageError?.((data) => {
+    setStorageError(data?.error || '数据保存失败，请检查磁盘空间和目录权限后重试。');
+  }), []);
+
   // 主进程发来的导航指令（例如浏览页点「立即播放」）
   useEffect(() => {
     if (!window.electronAPI.onNavigate) return undefined;
     return window.electronAPI.onNavigate((data) => {
       if (!data || !data.page) return;
       if (data.payload) setPlayerTarget({ ...data.payload, ts: Date.now() });
+      setVisited((pages) => pages.includes(data.page) ? pages : [...pages, data.page]);
       setPage(data.page);
     });
   }, []);
 
   const navigate = (nextPage) => {
-    setPlayerTarget(null);
+    setVisited((pages) => pages.includes(nextPage) ? pages : [...pages, nextPage]);
     setPage(nextPage);
   };
 
-  const renderPage = () => {
-    switch (page) {
+  const renderPage = (id) => {
+    switch (id) {
       case 'browse':
-        return <Browse onNavigate={navigate} />;
+        return <Browse active={page === id} onNavigate={navigate} />;
       case 'player':
-        return <Player target={playerTarget} onNavigate={navigate} />;
+        return <Player active={page === id} target={playerTarget} onNavigate={navigate} />;
       case 'manager':
-        return <DownloadManager onNavigate={navigate} />;
+        return <DownloadManager active={page === id} onNavigate={navigate} />;
       case 'settings':
-        return <SettingsPage />;
+        return <SettingsPage active={page === id} />;
       case 'download':
       default:
-        return <HongguoDownload onNavigate={navigate} />;
+        return <HongguoDownload active={page === id} onNavigate={navigate} />;
     }
   };
 
@@ -92,7 +99,8 @@ export default function App() {
           <span className="toolbar-location">{currentPage?.label}</span>
           <span className="toolbar-caption">红果短剧</span>
         </header>
-        <main className="main-content" key={page}>{renderPage()}</main>
+        {storageError && <div className="app-storage-error" role="alert"><span>{storageError}</span><button className="btn btn-outline btn-sm" onClick={() => setStorageError('')}>关闭提示</button></div>}
+        {visited.map((id) => <main className="main-content" data-page={id} hidden={page !== id} key={id}>{renderPage(id)}</main>)}
       </div>
     </div>
   );

@@ -8,6 +8,8 @@ const path = require('path');
 
 let dataFile = null;
 let cache = null; // { settings, tasks }
+let durable = '{}';
+let errorHandler = null;
 
 function loadCache() {
   if (!dataFile) throw new Error('store 未初始化');
@@ -22,6 +24,7 @@ function loadCache() {
   if (!cache || typeof cache !== 'object') cache = {};
   if (!Array.isArray(cache.tasks)) cache.tasks = [];
   if (!cache.settings || typeof cache.settings !== 'object') cache.settings = {};
+  durable = JSON.stringify(cache);
   return cache;
 }
 
@@ -30,16 +33,21 @@ function flush() {
   const temporary = dataFile + '.tmp';
   try {
     fs.mkdirSync(path.dirname(dataFile), { recursive: true });
-    fs.writeFileSync(temporary, JSON.stringify(cache || {}, null, 2), { encoding: 'utf8', mode: 0o600 });
+    const serialized = JSON.stringify(cache || {}, null, 2);
+    fs.writeFileSync(temporary, serialized, { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(temporary, dataFile);
+    durable = serialized;
   } catch (e) {
     try { fs.unlinkSync(temporary); } catch {}
-    console.error('[Store] 写入数据文件失败:', e.message);
+    cache = JSON.parse(durable);
+    try { errorHandler?.({ error: '保存失败，请检查磁盘空间或目录权限；本次变更未能保存。' }); } catch {}
+    throw e;
   }
 }
 
 function init(filePath) {
   dataFile = filePath;
+  cache = null;
   loadCache();
 }
 
@@ -98,6 +106,7 @@ function saveMergeTasks(list) {
 }
 
 module.exports = {
+  setErrorHandler: (handler) => { errorHandler = handler; },
   init,
   getSettings,
   saveSettings,

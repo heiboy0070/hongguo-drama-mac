@@ -17,6 +17,7 @@
 }
 
 .settings-card {
+  min-width: 0;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -71,6 +72,8 @@
 
 .settings-footer {
   display: flex;
+  align-items: center;
+  gap: 12px;
   justify-content: flex-end;
   border-top: 1px solid var(--border-muted);
   padding-top: 18px;
@@ -179,6 +182,8 @@
 }
 
 .proxy-modal-body {
+  min-width: 0;
+  border: 0;
   padding: 18px;
   display: flex;
   flex-direction: column;

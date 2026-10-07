@@ -11,7 +11,7 @@ import { Play, Film, Download, Check, RefreshCw, Layers, X, Trash2, ChevronDown,
  *  - 「边下边看」：下一集若还在下载，显示等待态并轮询，下完自动接上
  *  - 断点续播：按 series_id 记住看到第几集、第几秒
  */
-function Player({ target, onNavigate }) {
+function Player({ target, onNavigate, active = true }) {
   const [seriesList, setSeriesList] = useState([]);
   const [activeSeriesId, setActiveSeriesId] = useState('');
   const [detail, setDetail] = useState(null); // { series_title, episodes: [...], total, completedCount }
@@ -42,6 +42,8 @@ function Player({ target, onNavigate }) {
   const [compatMap, setCompatMap] = useState({});         // vidIndex -> 转码后 url
   const [compatProgress, setCompatProgress] = useState(null); // {vidIndex, percent}
   const [decodeFailed, setDecodeFailed] = useState(false);    // 当前集解不出画面
+  const [playbackError, setPlaybackError] = useState('');
+  const [playbackVersion, setPlaybackVersion] = useState(0);
   const [compatCache, setCompatCache] = useState({ files: 0, bytes: 0 });
   const [mergeAsk, setMergeAsk] = useState(false);            // 合并格式选择
 
@@ -58,6 +60,27 @@ function Player({ target, onNavigate }) {
   const compatRequestRef = useRef(null);
   const decodeTimer = useRef(null);
   const pendingTargetRef = useRef(null);
+  const loadedMediaRef = useRef(null);
+  const autoCompatAttemptRef = useRef(null);
+  const lastVideoSrcRef = useRef('');
+  const lastLoadRef = useRef(null);
+
+  // 只有收到当前片源的 metadata 后才保存，避免旧元素的 pause 覆盖新集断点。
+  const persistPosition = useCallback((force = false) => {
+    const media = loadedMediaRef.current;
+    if (!media || media.version !== mediaVersion.current) return;
+    const seconds = media.element.currentTime;
+    if (!Number.isFinite(seconds) || seconds < 0) return;
+    if (!force && Math.abs(seconds - lastSavedRef.current) < 3) return;
+    lastSavedRef.current = seconds;
+    window.electronAPI.savePlaybackPosition(media.seriesId, media.vidIndex, seconds).catch(() => {});
+  }, []);
+
+  const currentPosition = useCallback(() => {
+    const media = loadedMediaRef.current;
+    return media?.version === mediaVersion.current && Number.isFinite(media.element.currentTime)
+      ? media.element.currentTime : pendingSeekRef.current;
+  }, []);
 
   const releaseOnline = useCallback(() => {
     const request = onlineRequestRef.current;
@@ -65,10 +88,24 @@ function Player({ target, onNavigate }) {
     if (request) window.electronAPI.releaseOnlinePlay(request).catch(() => {});
   }, []);
 
-  const resetPlayback = useCallback(() => {
-    mediaVersion.current++;
-    clearTimeout(decodeTimer.current);
+  const cancelCompat = useCallback(() => {
+    const request = compatRequestRef.current;
     compatRequestRef.current = null;
+    if (request && window.electronAPI.cancelTranscodeForPlayback) {
+      window.electronAPI.cancelTranscodeForPlayback({ ...request }).catch(() => {});
+    }
+  }, []);
+
+  const resetPlayback = useCallback(() => {
+    persistPosition(true);
+    const previous = loadedMediaRef.current;
+    loadedMediaRef.current = null;
+    previous?.element.pause();
+    mediaVersion.current++;
+    setPlaybackVersion(mediaVersion.current);
+    autoCompatAttemptRef.current = null;
+    clearTimeout(decodeTimer.current);
+    cancelCompat();
     releaseOnline();
     setOnlineVid(null);
     setOnlineUrl('');
@@ -76,17 +113,28 @@ function Player({ target, onNavigate }) {
     setMediaBuffering(false);
     setCompatProgress(null);
     setDecodeFailed(false);
+    setPlaybackError('');
     lastSavedRef.current = 0;
-  }, [releaseOnline]);
+  }, [persistPosition, releaseOnline, cancelCompat]);
+
+  const stopPlayback = (message = '播放已停止，可重试本集继续观看') => {
+    const seekTo = currentPosition();
+    resetPlayback();
+    pendingSeekRef.current = seekTo;
+    setWaitingFor(null);
+    setPlaybackError(message);
+  };
 
   useEffect(() => () => {
+    persistPosition(true);
     selectionVersion.current++;
     mediaVersion.current++;
     selectedSeriesRef.current = '';
+    cancelCompat();
     releaseOnline();
     clearTimeout(decodeTimer.current);
     clearTimeout(toastTimer.current);
-  }, [releaseOnline]);
+  }, [persistPosition, releaseOnline, cancelCompat]);
 
   const showToast = useCallback((text) => {
     setToast(text);
@@ -154,7 +202,7 @@ function Player({ target, onNavigate }) {
     if (!window.electronAPI.onTranscodeProgress) return undefined;
     return window.electronAPI.onTranscodeProgress((d) => {
       const request = compatRequestRef.current;
-      if (!request || request.version !== mediaVersion.current || String(d.seriesId) !== request.seriesId || d.vidIndex !== request.vidIndex || d.done) return;
+      if (!request || d.requestId !== request.requestId || request.version !== mediaVersion.current || String(d.seriesId) !== request.seriesId || d.vidIndex !== request.vidIndex || d.done) return;
       setCompatProgress({ vidIndex: d.vidIndex, percent: d.percent || 0 });
     });
   }, []);
@@ -206,7 +254,7 @@ function Player({ target, onNavigate }) {
     if (!window.electronAPI.onOnlinePlayProgress) return undefined;
     return window.electronAPI.onOnlinePlayProgress((d) => {
       const request = onlineRequestRef.current;
-      if (!request || d.requestId !== request.requestId) return;
+      if (!request || request.prepared || d.requestId !== request.requestId) return;
       setOnlineProgress({
         vid: d.vid,
         percent: d.percent || 0,
@@ -219,7 +267,7 @@ function Player({ target, onNavigate }) {
 
   // 轮询：让「正在下载」的集实时更新，并在等待时自动接上
   useEffect(() => {
-    if (!activeSeriesId) return;
+    if (!activeSeriesId || (!active && waitingFor == null)) return;
     let busy = false;
     const timer = setInterval(async () => {
       if (busy) return;
@@ -233,20 +281,39 @@ function Player({ target, onNavigate }) {
         if (ep && !ep.locked && ep.status === 'completed') {
           // 等待中的下一集下好了 -> 自动切过去
           setWaitingFor(null);
+          const seekTo = wf === stateRef.current.currentIndex ? currentPosition() : 0;
           resetPlayback();
+          pendingSeekRef.current = seekTo;
           setCurrentIndex(wf);
         }
       }
     }, 2000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSeriesId, loadDetail, resetPlayback]);
+  }, [active, activeSeriesId, waitingFor, loadDetail, resetPlayback, currentPosition]);
 
   const episodes = detail ? detail.episodes : [];
   const current = useMemo(
     () => episodes.find((e) => e.vid_index === currentIndex) || null,
     [episodes, currentIndex]
   );
+
+  const compatUrl = current ? compatMap[current.vid_index] : null;
+  const isOnlinePlaying = onlineVid && current && current.vid === onlineVid && onlineUrl;
+  const canPlay = !!(!playbackError && !onlineProgress && current && !current.locked && (compatUrl || (current.status === 'completed' && current.fileUrl) || isOnlinePlaying));
+  const playableSource = compatUrl || (isOnlinePlaying ? onlineUrl : current?.fileUrl) || '';
+  // 原生全屏依附于 video 节点。准备下一集时保留结束帧，换源不换节点。
+  if (canPlay) lastVideoSrcRef.current = playableSource;
+  const videoSrc = lastVideoSrcRef.current;
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (loading || !canPlay || !v) return;
+    const previous = lastLoadRef.current;
+    lastLoadRef.current = { source: videoSrc, version: playbackVersion };
+    // 相同地址的显式重试不会触发 src 变更，用原生 load 重置媒体即可。
+    if (previous?.source === videoSrc && previous.version !== playbackVersion) v.load();
+  }, [loading, canPlay, videoSrc, playbackVersion]);
 
   const playableCount = episodes.filter((e) => e.status === 'completed').length;
 
@@ -255,12 +322,17 @@ function Player({ target, onNavigate }) {
     async (vidIndex) => {
       const ep = episodes.find((e) => e.vid_index === vidIndex);
       if (!ep || ep.locked) return;
-      const request = { seriesId: String(activeSeriesId), vidIndex, version: mediaVersion.current };
+      const request = { requestId: crypto.randomUUID(), seriesId: String(activeSeriesId), vidIndex, version: mediaVersion.current };
       if (compatRequestRef.current?.version === request.version && compatRequestRef.current?.vidIndex === vidIndex) return;
+      autoCompatAttemptRef.current = request.version;
+      pendingSeekRef.current = currentPosition();
+      persistPosition(true);
+      videoRef.current?.pause();
       compatRequestRef.current = request;
       setCompatProgress({ vidIndex, percent: 0 });
       try {
         const res = await window.electronAPI.transcodeForPlayback({
+          requestId: request.requestId,
           seriesId: activeSeriesId,
           vidIndex,
           vid: ep.vid,
@@ -269,6 +341,7 @@ function Player({ target, onNavigate }) {
         if (compatRequestRef.current !== request || request.version !== mediaVersion.current) return;
         compatRequestRef.current = null;
         if (res && res.success) {
+          loadedMediaRef.current = null;
           setCompatMap((prev) => ({ ...prev, [vidIndex]: res.url }));
           setDecodeFailed(false);
           setCompatProgress(null);
@@ -287,19 +360,25 @@ function Player({ target, onNavigate }) {
         showToast('转码异常: ' + e.message);
       }
     },
-    [episodes, activeSeriesId, showToast]
+    [episodes, activeSeriesId, showToast, currentPosition, persistPosition]
   );
 
   const clearCompatCache = async () => {
-    const r = await window.electronAPI.clearCompatCache();
-    setCompatMap({});
-    setCompatCache({ files: 0, bytes: 0 });
-    showToast(r && r.count > 0 ? `已清理转码缓存，释放 ${fmtSize(r.freed)}` : '转码缓存已是空的');
+    const affected = !!compatMap[currentIndex] || !!compatRequestRef.current;
+    if (affected) stopPlayback('兼容播放已停止，可重试本集继续观看');
+    try {
+      const r = await window.electronAPI.clearCompatCache();
+      if (!r?.success) { showToast(r?.error || '清理转码缓存失败'); return; }
+      setCompatMap({});
+      setCompatCache({ files: 0, bytes: 0 });
+      showToast(r.count > 0 ? `已清理转码缓存，释放 ${fmtSize(r.freed)}` : '转码缓存已是空的');
+    } catch (e) { showToast('清理转码缓存失败: ' + e.message); }
   };
 
   // 播放中若始终解不出画面（videoWidth 一直为 0），判定为解码不兼容。
   // 必须定义在早返回之前 —— hooks 不能出现在条件分支之后。
   const handlePlaying = useCallback(() => {
+    if (playbackVersion !== mediaVersion.current || !canPlay || loadedMediaRef.current?.version !== mediaVersion.current) return;
     setDecodeFailed(false);
     setMediaBuffering(false);
     const idx = currentIndex;
@@ -311,31 +390,34 @@ function Player({ target, onNavigate }) {
       if (!v) return;
       if (v.videoWidth === 0 && !v.paused && v.currentTime > 0.3) {
         setDecodeFailed(true);
-        if (autoCompat && !compatMap[idx]) {
+        if (autoCompat && !compatMap[idx] && autoCompatAttemptRef.current !== version) {
           showToast('当前视频未显示画面，正在尝试兼容转码…');
           startCompatPlay(idx);
         }
       }
     }, 2600);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoCompat, compatMap, currentIndex, startCompatPlay, showToast]);
+  }, [autoCompat, compatMap, currentIndex, startCompatPlay, showToast, playbackVersion, canPlay]);
 
   /**
    * 在线播放：明文片源按需加载，加密片源准备后返回播放地址。
    * 不占用下载目录；加密片源的准备文件会自动清理。
    */
   const startOnlinePlay = useCallback(
-    async (vidIndex) => {
+    async (vidIndex, resumeAt) => {
       const ep = episodes.find((e) => e.vid_index === vidIndex);
       if (ep?.locked) { showToast('这一集需在来源平台解锁'); return; }
       if (!ep || !ep.vid) {
         showToast('这一集暂时无法播放，请重新获取剧集后重试');
         return;
       }
+      const seekTo = resumeAt ?? (vidIndex === stateRef.current.currentIndex ? currentPosition() : 0);
       resetPlayback();
+      setCompatMap(prev => { const next = { ...prev }; delete next[vidIndex]; return next; });
       const request = { requestId: crypto.randomUUID(), vid: ep.vid };
       onlineRequestRef.current = request;
-      pendingSeekRef.current = 0;
+      pendingSeekRef.current = seekTo;
+      window.electronAPI.savePlaybackPosition(activeSeriesId, vidIndex, seekTo).catch(() => {});
       setCurrentIndex(vidIndex);
       setWaitingFor(null);
       setOnlineProgress({ vid: ep.vid, percent: 0, phase: 'preparing' });
@@ -357,9 +439,11 @@ function Player({ target, onNavigate }) {
           showToast((res && res.error) || '在线播放准备失败');
           setOnlineVid(null);
           setOnlineProgress(null);
+          setPlaybackError((res && res.error) || '在线播放准备失败');
           return;
         }
         request.streamId = res.streamId;
+        request.prepared = true;
         setMediaBuffering(true);
         setOnlineUrl(res.url);
         setOnlineProgress(null);
@@ -370,27 +454,35 @@ function Player({ target, onNavigate }) {
         showToast('在线播放失败: ' + e.message);
         setOnlineVid(null);
         setOnlineProgress(null);
+        setPlaybackError('在线播放失败: ' + e.message);
       }
     },
-    [episodes, activeSeriesId, showToast, refreshCacheInfo, resetPlayback, releaseOnline]
+    [episodes, activeSeriesId, showToast, refreshCacheInfo, resetPlayback, releaseOnline, currentPosition]
   );
 
   // 切集
   const goToEpisode = useCallback(
-    (vidIndex) => {
+    (vidIndex, resumeAt) => {
       const ep = episodes.find((e) => e.vid_index === vidIndex);
       if (!ep || ep.locked) return;
       if (ep.status !== 'completed' || !ep.fileUrl) {
-        startOnlinePlay(vidIndex);
+        startOnlinePlay(vidIndex, resumeAt);
         return;
       }
+      const seekTo = resumeAt ?? (vidIndex === stateRef.current.currentIndex ? currentPosition() : 0);
       resetPlayback();
       setCurrentIndex(vidIndex);
       setWaitingFor(null);
-      pendingSeekRef.current = 0;
+      pendingSeekRef.current = seekTo;
+      window.electronAPI.savePlaybackPosition(activeSeriesId, vidIndex, seekTo).catch(() => {});
     },
-    [episodes, resetPlayback, startOnlinePlay]
+    [episodes, activeSeriesId, resetPlayback, startOnlinePlay, currentPosition]
   );
+
+  const retryPlayback = () => {
+    setCompatMap(prev => { const next = { ...prev }; delete next[currentIndex]; return next; });
+    goToEpisode(currentIndex, currentPosition());
+  };
 
   // 找下一集（按集号顺序）
   const findNext = useCallback(
@@ -432,55 +524,49 @@ function Player({ target, onNavigate }) {
       showToast(episodes.some((ep) => ep.locked) ? '已播完可播放集数，其余集数需在来源平台解锁' : '已经是最后一集');
       return;
     }
-    if (sid) window.electronAPI.savePlaybackPosition(sid, next.vid_index, 0);
-
-    goToEpisode(next.vid_index);
+    goToEpisode(next.vid_index, 0);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [findNext, goToEpisode, showToast, startOnlinePlay, autoDelete, episodes, refreshCacheInfo, loadDetail]);
 
-  // 记住播放进度（每 5 秒 + 切集时）
-  const persistPosition = useCallback(() => {
-    const v = videoRef.current;
-    const { activeSeriesId: sid, currentIndex: ci } = stateRef.current;
-    if (!v || !sid) return;
-    if (Math.abs(v.currentTime - lastSavedRef.current) < 3) return;
-    lastSavedRef.current = v.currentTime;
-    window.electronAPI.savePlaybackPosition(sid, ci, v.currentTime);
-  }, []);
-
+  // 后台继续播放也保存进度；离开页面、暂停和关闭窗口强制保存最后一秒。
   useEffect(() => {
     const timer = setInterval(persistPosition, 5000);
+    const save = () => persistPosition(true);
+    window.addEventListener('beforeunload', save);
     return () => {
       clearInterval(timer);
-      persistPosition();
+      window.removeEventListener('beforeunload', save);
+      save();
     };
   }, [persistPosition]);
 
-  // 切集 / 恢复断点
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v || !current || current.locked || current.status !== 'completed') return;
-    const seekTo = pendingSeekRef.current || 0;
-    const onLoaded = () => {
-      if (seekTo > 0 && seekTo < v.duration - 3) {
-        v.currentTime = seekTo;
-        showToast(`从 ${Math.floor(seekTo / 60)}:${String(Math.floor(seekTo % 60)).padStart(2, '0')} 继续播放`);
-      }
-      pendingSeekRef.current = 0;
-      v.play().catch(() => {});
-    };
-    v.addEventListener('loadedmetadata', onLoaded, { once: true });
-    return () => v.removeEventListener('loadedmetadata', onLoaded);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current && current.fileUrl]);
+    if (!active) persistPosition(true);
+  }, [active, persistPosition]);
+
+  const handleMetadata = (event) => {
+    const v = event.currentTarget;
+    if (!canPlay || playbackVersion !== mediaVersion.current || v !== videoRef.current || !current || current.locked) return;
+    if (v.currentSrc && v.currentSrc !== videoSrc) return;
+    loadedMediaRef.current = { element: v, seriesId: activeSeriesId, vidIndex: currentIndex, version: mediaVersion.current };
+    const seekTo = Math.max(0, Number(pendingSeekRef.current) || 0);
+    if (seekTo > 0 && (!Number.isFinite(v.duration) || seekTo < v.duration - 3)) {
+      v.currentTime = seekTo;
+      showToast(`从 ${Math.floor(seekTo / 60)}:${String(Math.floor(seekTo % 60)).padStart(2, '0')} 继续播放`);
+    }
+    pendingSeekRef.current = 0;
+    if (compatMap[currentIndex]) releaseOnline();
+    v.play().catch(() => {});
+  };
 
   // 快捷键
   useEffect(() => {
+    if (!active) return;
     const onKey = (e) => {
       const v = videoRef.current;
       if (!v || e.target.closest('input, button, select, textarea, [contenteditable=true]')) return;
-      const { currentIndex: ci, activeSeriesId: sid, autoNext: an } = stateRef.current;
+      const { currentIndex: ci, autoNext: an } = stateRef.current;
       if (e.code === 'Space') {
         e.preventDefault();
         v.paused ? v.play().catch(() => {}) : v.pause();
@@ -491,8 +577,7 @@ function Player({ target, onNavigate }) {
       } else if (e.key === 'ArrowUp') {
         const p = findPrev(ci);
         if (p) {
-          if (sid) window.electronAPI.savePlaybackPosition(sid, ci, v.currentTime);
-          goToEpisode(p.vid_index, true);
+          goToEpisode(p.vid_index);
         }
       } else if (e.key === 'ArrowDown') {
         const n = findNext(ci);
@@ -503,10 +588,10 @@ function Player({ target, onNavigate }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [findNext, findPrev, goToEpisode]);
+  }, [active, findNext, findPrev, goToEpisode]);
 
   const switchSeries = useCallback(async (sid, requestedIndex = 0) => {
-    persistPosition();
+    persistPosition(true);
     const version = ++selectionVersion.current;
     selectedSeriesRef.current = String(sid);
     pendingTargetRef.current = null;
@@ -525,8 +610,8 @@ function Player({ target, onNavigate }) {
       const selected = d.episodes.find(e => e.vid_index === wantedIndex && !e.locked) || d.episodes.find(e => !e.locked);
       setCurrentIndex(selected?.vid_index || 1);
       pendingSeekRef.current = selected?.vid_index === saved?.vid_index ? saved.currentTime || 0 : 0;
-      if (requestedIndex && selected && selected.status !== 'completed') {
-        pendingTargetRef.current = { seriesId: String(sid), vidIndex: selected.vid_index };
+      if ((requestedIndex || saved) && selected && (selected.status !== 'completed' || !selected.fileUrl)) {
+        pendingTargetRef.current = { seriesId: String(sid), vidIndex: selected.vid_index, seekTo: pendingSeekRef.current };
       }
     } catch (e) {
       if (version === selectionVersion.current) showToast('加载剧集失败: ' + e.message);
@@ -556,9 +641,9 @@ function Player({ target, onNavigate }) {
 
   useEffect(() => {
     const pending = pendingTargetRef.current;
-    if (loading || !pending || pending.seriesId !== String(activeSeriesId) || detail?.series_id !== pending.seriesId) return;
+    if (loading || !pending || pending.seriesId !== String(activeSeriesId) || String(detail?.series_id) !== pending.seriesId) return;
     pendingTargetRef.current = null;
-    startOnlinePlay(pending.vidIndex);
+    startOnlinePlay(pending.vidIndex, pending.seekTo);
   }, [loading, detail, activeSeriesId, startOnlinePlay]);
 
   // 从列表移除一部短剧（只取消登记，不删本地文件）
@@ -607,10 +692,15 @@ function Player({ target, onNavigate }) {
   };
 
   const clearCache = async () => {
-    resetPlayback();
-    await window.electronAPI.clearOnlineCache();
-    refreshCacheInfo();
-    showToast('已清空在线播放缓存');
+    if (onlineRequestRef.current && !compatMap[currentIndex]) {
+      stopPlayback('在线播放已停止，可重试本集继续观看');
+    }
+    try {
+      const r = await window.electronAPI.clearOnlineCache();
+      if (!r?.success) { showToast(r?.error || '清理播放缓存失败'); return; }
+      refreshCacheInfo();
+      showToast('已清空在线播放缓存');
+    } catch (e) { showToast('清理播放缓存失败: ' + e.message); }
   };
 
   const downloadEpisode = async (vidIndex) => {
@@ -660,7 +750,7 @@ function Player({ target, onNavigate }) {
     }
   };
 
-  useDialogKeyboard(!!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); setMergeAsk(false); }, '.player-confirm');
+  useDialogKeyboard(active && !!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); setMergeAsk(false); }, '.player-confirm');
 
   // ===== 渲染 =====
   if (loading) {
@@ -698,12 +788,6 @@ function Player({ target, onNavigate }) {
       </div>
     );
   }
-
-  // 可播放：本地已下载走 file://，否则走在线内存流；兼容模式下优先用转码后的文件
-  const compatUrl = current ? compatMap[current.vid_index] : null;
-  const isOnlinePlaying = onlineVid && current && current.vid === onlineVid && onlineUrl;
-  const canPlay = !!(current && !current.locked && (compatUrl || (current.status === 'completed' && current.fileUrl) || isOnlinePlaying));
-  const videoSrc = compatUrl || (isOnlinePlaying ? onlineUrl : (current && current.fileUrl) || '');
 
   return (
     <div className="player-container">
@@ -844,6 +928,7 @@ function Player({ target, onNavigate }) {
                                   okText: '删除文件',
                                   danger: true,
                                   onOk: async () => {
+                                    if (String(s.series_id) === selectedSeriesRef.current && !onlineUrl && !compatMap[currentIndex]) stopPlayback('本地播放已停止，可重新连接片源观看');
                                     const r = await window.electronAPI.deleteSeriesFiles(s.series_id);
                                     if (r && r.success) {
                                       showToast(`已删除 ${r.count} 个文件，释放 ${fmtSize(r.freed)}`);
@@ -903,6 +988,7 @@ function Player({ target, onNavigate }) {
                     okText: '全部删除',
                     danger: true,
                     onOk: async () => {
+                      if (current?.fileUrl && !onlineUrl && !compatMap[currentIndex]) stopPlayback('本地播放已停止，可重新连接片源观看');
                       const r = await window.electronAPI.deleteAllDownloaded();
                       if (r && r.success) {
                         showToast(`已删除 ${r.count} 个文件，释放 ${fmtSize(r.freed)}`);
@@ -934,29 +1020,42 @@ function Player({ target, onNavigate }) {
 
       {/* 播放区 */}
       <div className="player-stage">
-        {canPlay ? (
           <video
             ref={videoRef}
-            src={videoSrc}
+            src={videoSrc || undefined}
             className="player-video"
+            aria-busy={!canPlay || mediaBuffering}
             controls
-            autoPlay
-            onEnded={handleEnded}
-            onPause={persistPosition}
+            onLoadedMetadata={handleMetadata}
+            onPlay={(event) => { if (!canPlay || playbackVersion !== mediaVersion.current) event.currentTarget.pause(); }}
+            onEnded={() => { if (canPlay && playbackVersion === mediaVersion.current && (!videoRef.current || loadedMediaRef.current?.version === mediaVersion.current)) handleEnded(); }}
+            onPause={() => persistPosition(true)}
             onPlaying={handlePlaying}
-            onWaiting={() => setMediaBuffering(true)}
-            onCanPlay={() => setMediaBuffering(false)}
+            onWaiting={() => { if (canPlay && playbackVersion === mediaVersion.current) setMediaBuffering(true); }}
+            onCanPlay={() => { if (canPlay && playbackVersion === mediaVersion.current) setMediaBuffering(false); }}
             onError={(event) => {
+              if (!canPlay || playbackVersion !== mediaVersion.current) return;
+              if (videoRef.current && event.currentTarget !== videoRef.current) return;
+              if (event.currentTarget.currentSrc && event.currentTarget.currentSrc !== videoSrc) return;
               const failedDecode = [3, 4].includes(event.currentTarget.error?.code);
-              if (!failedDecode) resetPlayback();
+              if (!failedDecode) {
+                const seekTo = currentPosition(); resetPlayback(); pendingSeekRef.current = seekTo;
+                setPlaybackError('视频加载失败，请重试本集或检查网络');
+              }
               setMediaBuffering(false);
               setDecodeFailed(failedDecode);
               showToast(failedDecode ? '视频解码失败，可选择兼容播放' : '视频加载失败，请重试本集或检查网络');
+              if (failedDecode && autoCompat && !compatUrl && autoCompatAttemptRef.current !== mediaVersion.current) startCompatPlay(currentIndex);
             }}
           />
-        ) : (
-          <div className="player-placeholder">
-            {onlineProgress && onlineProgress.vid && (!current || current.vid === onlineProgress.vid) ? (
+        {!canPlay && (
+          <div className="player-placeholder" style={{ position: 'absolute', inset: 0 }}>
+            {playbackError ? (
+              <><Film size={34} /><p role="alert">{playbackError}</p><div className="player-placeholder-actions">
+                <button className="btn btn-primary" onClick={retryPlayback}>{current?.status === 'completed' ? '重试本集' : '重试本集（在线播放）'}</button>
+                {current?.status === 'completed' && <button className="btn btn-outline" onClick={() => startOnlinePlay(currentIndex)}>重新连接片源</button>}
+              </div></>
+            ) : onlineProgress && onlineProgress.vid && (!current || current.vid === onlineProgress.vid) ? (
               <>
                 <RefreshCw size={30} className="spin" />
                 <p>{onlineProgress.phase === 'preparing' ? '正在连接片源…' : onlineProgress.phase === 'decrypting' ? '正在准备播放…' : '正在缓冲在线播放…'}</p>
@@ -968,7 +1067,7 @@ function Player({ target, onNavigate }) {
                   {onlineProgress.total ? ` · ${(onlineProgress.received / 1048576).toFixed(1)} / ${(onlineProgress.total / 1048576).toFixed(1)} MB` : ''}
                   {' · 不写入下载目录'}
                 </span>
-                <button className="btn btn-outline" onClick={resetPlayback}>取消播放</button>
+                <button className="btn btn-outline" onClick={() => stopPlayback()}>取消播放</button>
               </>
             ) : waitingFor != null ? (
               <>
@@ -1022,7 +1121,7 @@ function Player({ target, onNavigate }) {
         {canPlay && mediaBuffering && !compatProgress && (
           <div className="compat-overlay" role="status">
             <RefreshCw size={26} className="spin" /><p>正在加载视频…</p>
-            <button className="btn btn-outline" onClick={resetPlayback}>取消播放</button>
+            <button className="btn btn-outline" onClick={() => stopPlayback()}>取消播放</button>
           </div>
         )}
 
@@ -1037,10 +1136,11 @@ function Player({ target, onNavigate }) {
             <span className="compat-overlay-sub">
               {compatProgress.percent || 0}% · 正在处理当前视频，完成后切换到兼容片源
             </span>
+            <button className="btn btn-outline" onClick={() => stopPlayback('转码已取消，可重试本集继续观看')}>取消转码</button>
           </div>
         )}
 
-        {!compatProgress && decodeFailed && canPlay && !compatUrl && (
+        {!compatProgress && decodeFailed && canPlay && (
           <div className="compat-overlay">
             <Film size={30} />
             <p>当前片源无法正常解码</p>
@@ -1048,11 +1148,12 @@ function Player({ target, onNavigate }) {
               可以重新连接片源，或尝试转码为 H.264 兼容格式。
             </span>
             <div className="player-placeholder-actions">
+              <button className="btn btn-primary" onClick={retryPlayback}>重试本集</button>
               <button className="btn btn-outline" onClick={() => startOnlinePlay(currentIndex)}>重新连接片源</button>
-              <button className="btn btn-primary" onClick={() => startCompatPlay(currentIndex)}>
+              {!compatUrl && <button className="btn btn-outline" onClick={() => startCompatPlay(currentIndex)}>
                 <Zap size={15} />
                 转码后播放
-              </button>
+              </button>}
               <button className="btn btn-outline" onClick={toggleAutoCompat}>
                 {autoCompat ? '关闭自动转码' : '开启自动转码'}
               </button>

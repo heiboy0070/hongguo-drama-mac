@@ -48,6 +48,9 @@ input::placeholder { color: #79766f; }
 .toolbar-location { font-weight: 500; font-size: 12px; color: var(--text-secondary); }
 .toolbar-caption { color: var(--text-tertiary); font-size: 11px; }
 .main-content { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 34px 36px 48px; }
+.main-content[hidden], [hidden] { display: none !important; }
+.app-storage-error { display: flex; align-items: center; gap: 16px; justify-content: space-between; padding: 12px 24px; background: #fae9e7; color: #a52d32; }
+.app-storage-error span { min-width: 0; overflow-wrap: anywhere; }
 .browse-container, .hongguo-container, .dm-container, .player-container { width: 100%; max-width: 1180px; margin: 0 auto; padding: 0; }
 .settings-container { width: 100%; max-width: 840px; margin: 0 auto; }
 h2, .browse-title h2, .hero-text h2, .settings-header h2, .dm-title h2, .player-title h2 { color: var(--text-primary); font-size: 28px; line-height: 1.25; font-weight: 700; letter-spacing: -.035em; }

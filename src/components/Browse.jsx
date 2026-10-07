@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import useDialogKeyboard from './useDialogKeyboard';
 import './Browse.css';
 import { Film, RefreshCw, ExternalLink, Download, Play, Check, X, Search } from './icons';
+import { isSubmitKey, parseEpisodeRange } from './episodeRange';
 
 const pageCache = new Map();
 const PAGE_CACHE_TTL_MS = 60_000;
@@ -16,7 +17,7 @@ const LIST_TIMEOUT_MS = 25_000;
  *         -> 复用 get-series-episodes 拿到每集「已下载/下载中/未下载」状态
  *         -> 跳播放器 或 走既有批量下载
  */
-function Browse({ onNavigate }) {
+function Browse({ onNavigate, active = true }) {
   const [source, setSource] = useState('hongguo');
   const [categories, setCategories] = useState([]);
   const [category, setCategory] = useState('real-drama');
@@ -34,6 +35,7 @@ function Browse({ onNavigate }) {
   const [detail, setDetail] = useState(null); // { series_id, series_title, cover, episodes: [...] }
   const [detailLoading, setDetailLoading] = useState(false);
   const [rangeInput, setRangeInput] = useState('');
+  const [rangeError, setRangeError] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(new Set());
   const [submitting, setSubmitting] = useState(false);
   const detailRequest = useRef(0);
@@ -159,8 +161,9 @@ function Browse({ onNavigate }) {
 
   useEffect(() => {
     loadCategories();
-    loadDownloadedMap();
-  }, [loadCategories, loadDownloadedMap]);
+  }, [loadCategories]);
+
+  useEffect(() => { if (active) loadDownloadedMap(); }, [active, loadDownloadedMap]);
 
   useEffect(() => {
     loadList(category, genre, page);
@@ -207,7 +210,7 @@ function Browse({ onNavigate }) {
     invalidateList();
     setError('');
     setPage(next);
-    document.querySelector('.main-content')?.scrollTo({ top: 0, behavior: 'smooth' });
+    document.querySelector('.main-content:not([hidden])')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // ===== 打开某部剧 =====
@@ -217,6 +220,7 @@ function Browse({ onNavigate }) {
     setDetail(null);
     setSelectedIdx(new Set());
     setRangeInput('');
+    setRangeError('');
     try {
       const res = await window.electronAPI.searchResolve(item.series_id);
       if (request !== detailRequest.current) return;
@@ -259,29 +263,11 @@ function Browse({ onNavigate }) {
   // 区间快选：1-50 / 前10 / 后30 / 全选 / 清空
   const applyRange = (expr) => {
     if (!detail) return;
-    const total = detail.episodes.length;
-    const nums = new Set();
-    const push = (n) => {
-      if (n >= 1 && n <= total) nums.add(n);
-    };
-    const parse = (s) => {
-      const text = String(s || '').trim();
-      if (!text) return;
-      for (const part of text.split(/[,，]/)) {
-        const p = part.trim();
-        if (!p) continue;
-        const m = p.match(/^(\d+)\s*[-~]\s*(\d+)$/);
-        if (m) {
-          const a = parseInt(m[1], 10);
-          const b = parseInt(m[2], 10);
-          for (let i = Math.max(1, Math.min(a, b)); i <= Math.min(total, Math.max(a, b)); i++) push(i);
-        } else if (/^\d+$/.test(p)) {
-          push(parseInt(p, 10));
-        }
-      }
-    };
-    parse(expr);
-    setSelectedIdx(new Set(detail.episodes.filter((e) => !e.locked && nums.has(e.vid_index)).map((e) => e.vid_index)));
+    try {
+      const nums = parseEpisodeRange(expr, detail.episodes.length);
+      setSelectedIdx(new Set(detail.episodes.filter((e) => !e.locked && nums.has(e.vid_index)).map((e) => e.vid_index)));
+      setRangeError('');
+    } catch (error) { setRangeError(error.message); }
   };
 
   const downloadSelected = async () => {
@@ -331,7 +317,7 @@ function Browse({ onNavigate }) {
     } catch (e) { showToast(e.message || '来源页面打开失败', 'error'); }
   };
 
-  useDialogKeyboard(!!detail || detailLoading, closeDetail, '.browse-drawer');
+  useDialogKeyboard(active && (!!detail || detailLoading), closeDetail, '.browse-drawer');
 
   const totalPages = meta.totalPages || 0;
   const pageNumbers = useMemo(() => {
@@ -514,11 +500,12 @@ function Browse({ onNavigate }) {
                           aria-label="选择集数范围"
                           placeholder="区间，如 1-50 或 1,3,5"
                           value={rangeInput}
-                          onChange={(e) => setRangeInput(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && applyRange(rangeInput)}
+                          onChange={(e) => { setRangeInput(e.target.value); setRangeError(''); }}
+                          onKeyDown={(e) => isSubmitKey(e) && applyRange(rangeInput)}
                         />
                         <button className="btn btn-outline btn-sm" onClick={() => applyRange(rangeInput)}>应用</button>
                       </div>
+                      {rangeError && <p className="alert alert-error" role="alert">{rangeError}</p>}
                       <div className="preset-row mt8">
                         <button className="btn-chip" onClick={() => applyRange(`1-${Math.min(10, detail.total)}`)}>前10集</button>
                         <button className="btn-chip" onClick={() => applyRange(`1-${Math.min(30, detail.total)}`)}>前30集</button>

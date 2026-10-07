@@ -254,6 +254,7 @@
   background: rgba(12, 14, 18, 0.88);
   color: #e8eaed;
   z-index: 5;
+  overflow-y: auto;
 }
 
 .compat-overlay p {
@@ -320,6 +321,8 @@
 .player-confirm {
   width: 100%;
   max-width: 440px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
@@ -351,6 +354,7 @@
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+  flex-wrap: wrap;
   margin-top: 18px;
 }
 
@@ -439,6 +443,7 @@
 .player-now-title {
   font-size: 14px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .player-now-sub {
@@ -511,7 +516,6 @@
 .ep-missing {
   border-style: dashed;
   color: var(--text-tertiary);
-  opacity: 0.75;
 }
 
 /* 下载中：蓝色进度填充 */

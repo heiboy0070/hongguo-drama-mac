@@ -60,7 +60,7 @@ async function merge(label, files, compatible, mode = '') {
   if (process.argv.includes('--real')) files = process.argv.slice(process.argv.indexOf('--real') + 1);
   else {
     files = ['h264', 'hevc'].map(codec => path.join(root, `${codec}.mp4`));
-    for (let i = 0; i < files.length; i++) run('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=160x90:r=24:d=1', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '1', '-c:v', i ? 'libx265' : 'libx264', ...(i ? ['-x265-params', 'log-level=error:pools=1'] : []), '-pix_fmt', 'yuv420p', '-c:a', 'aac', files[i]]);
+    for (let i = 0; i < files.length; i++) run('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=640x360:r=24:d=1', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '1', '-c:v', i ? (process.platform === 'darwin' ? 'hevc_videotoolbox' : 'libx265') : 'libx264', ...(i && process.platform !== 'darwin' ? ['-x265-params', 'log-level=error:pools=1'] : []), '-pix_fmt', 'yuv420p', '-c:a', 'aac', files[i]]);
   }
   assert.equal(files.length, 2);
   if (process.argv.includes('--extras')) {

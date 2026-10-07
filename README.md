@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/jackotom/hongguo-drama-mac/releases/tag/v1.1.3"><img alt="版本 1.1.3" src="https://img.shields.io/badge/release-v1.1.3-c8383d?style=flat-square"></a>
+  <a href="https://github.com/jackotom/hongguo-drama-mac/releases/tag/v1.1.4"><img alt="版本 1.1.4" src="https://img.shields.io/badge/release-v1.1.4-c8383d?style=flat-square"></a>
   <img alt="macOS 13 或更新版本" src="https://img.shields.io/badge/macOS-13%2B-252523?style=flat-square">
   <img alt="Apple Silicon arm64" src="https://img.shields.io/badge/Apple_Silicon-arm64-252523?style=flat-square">
   <a href="LICENSE"><img alt="GPL-3.0 许可证" src="https://img.shields.io/badge/license-GPL--3.0-555555?style=flat-square"></a>
-  <a href="https://github.com/jackotom/hongguo-drama-mac/releases/tag/v1.1.3"><img alt="v1.1.3 Developer ID 签名并通过 Apple 公证" src="https://img.shields.io/badge/v1.1.3-Developer_ID_%2B_Notarized-33745c?style=flat-square"></a>
+  <a href="https://github.com/jackotom/hongguo-drama-mac/releases/tag/v1.1.4"><img alt="v1.1.4 Developer ID 签名并通过 Apple 公证" src="https://img.shields.io/badge/v1.1.4-Developer_ID_%2B_Notarized-33745c?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -35,11 +35,11 @@
 
 需要 **macOS 13 或更新版本、Apple Silicon（M 系列）Mac**。当前发行包为 arm64，应用已内置所需媒体工具，使用时无需安装 Node.js、Homebrew 或 FFmpeg。
 
-1. 打开 [最新版本下载页](https://github.com/jackotom/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `Hongguo-1.1.3-mac-arm64.dmg`。
+1. 打开 [最新版本下载页](https://github.com/jackotom/hongguo-drama-mac/releases/latest)，在 **Assets** 中下载 `.dmg` 安装包。当前版本文件名为 `Hongguo-1.1.4-mac-arm64.dmg`。
 2. 打开 DMG，把「红果短剧」拖入「应用程序」，再从「应用程序」启动。
 3. 在「设置」中选择下载目录；进入「发现短剧」选择来源，或在「搜索与下载」中查找剧名，打开详情后选择分集。
 
-**正式 v1.1.3 发行包已完成 Developer ID 签名与 Apple 公证。** 应用与 DMG 均已装订公证票据；应用启用了运行时加固和可信时间戳。发行页同时提供应用源码、FFmpeg/x264 对应源码及 `SHA256SUMS.txt`，方便核对下载文件。
+**正式 v1.1.4 发行包已完成 Developer ID 签名与 Apple 公证。** 应用与 DMG 均已装订公证票据；应用启用了运行时加固和可信时间戳。发行页同时提供应用源码、FFmpeg/x264 对应源码及 `SHA256SUMS.txt`，方便核对下载文件。
 
 ## 从发现短剧到本地剧库
 
@@ -62,7 +62,7 @@
 
 ### 下载后，按需要合并
 
-**快速合并**适合编码参数一致的分集，可直接拼接；遇到混合 H.264/HEVC 等情况，应用会先统一编码再合并，因此不一定能直接保留原编码。**兼容合并**统一输出 H.264，适合需要更广泛播放兼容性的场景，处理时间也更长。
+**快速合并**适合编码参数一致的分集，可直接拼接；遇到混合 H.264/HEVC 等情况，应用会先统一编码再合并，因此不一定能直接保留原编码。**兼容合并**输出 H.264；已有分集符合目标参数时直接拼接，仅时间基或音轨不同则只处理必要部分，混合编码时才统一转码。转码按来源码率估算，原文件保留。
 
 合并只包含已经下载的分集，不会自动补齐缺集。建议先在下载管理中核对完成状态，再导出。
 
@@ -83,24 +83,28 @@
 
 ## 当前版本与验证范围
 
-[**v1.1.3 · 2026-10-07**](https://github.com/jackotom/hongguo-drama-mac/releases/tag/v1.1.3) 新增西饭独立来源，修复漫画页切回真人剧时的目录阻塞，并完善混合编码分集的合并流程。
+[**v1.1.4 · 2026-10-07**](https://github.com/jackotom/hongguo-drama-mac/releases/tag/v1.1.4) 修复全屏连播切到下一集退出全屏的问题；完善播放续播、下载清理与取消，减少下载列表刷新开销，并优化合并时的重复转码与文件体积。
 
-当前版本已检查目录与来源切换、西饭下载和锁定边界、混合编码合并，以及正式包的签名公证。**这些结果来自有限样本，不代表所有剧集、清晰度或网络环境都能得到同样结果。**
+- 全屏连播保持视频节点；下一集在线播放准备期间仍保留全屏。
+- 本地、在线及兼容播放支持续播；失败可重试，兼容准备支持定向取消。
+- 同名剧按标识分目录，清理等待运行任务停止，外移文件可重新下载。
+- 下载管理分页显示，批量进度更新；离开页面后停止后台轮询。
+- 同参数媒体直接拼接；仅时间基或音轨不同时按需处理，混码保守统一编码，硬件失败自动回退。
 
 <details>
-<summary>查看具体样本与验证结果</summary>
+<summary>查看本轮样本与验证结果</summary>
 
 | 检查项 | 已验证结果 |
 |---|---|
-| 来源与目录切换 | 红果目录恢复加载，来源切换通过；西饭连续两页各返回 30 部剧，搜索样本返回 10 条。 |
-| 西饭锁定边界 | 80 集样本保留 2 集锁定；下载、播放与兼容转码入口拒绝锁定集。 |
-| 西饭下载与媒体加载 | 一集样本下载完成，约 34 MB；读取到 1080 × 1920、50.8 秒的媒体信息，离屏加载时保持暂停。 |
-| 混合编码合并 | 两个实际 H.264/HEVC 分集合并后共 153.525 秒，交界处解码检查无错误。 |
-| 正式发行包 | 应用与 DMG 公证结果均为 Accepted，签名和票据装订验证通过；4 个发行附件的远端大小及 SHA256 与本地一致。 |
+| 原生全屏连播 | 静音黑片自然播完，本地转在线准备、在线开始及再转本地，全程保持同一个全屏视频节点。 |
+| 播放、下载与界面回归 | 播放 8 项、兼容生命周期 8 项、下载管理 8 项、界面状态 26 项通过；另完成下载安全、存储、解密与合并专项检查。 |
+| 同编码兼容合并样本 | 7.906 秒降至 0.163 秒；约 96.83 MiB 降至 13.41 MiB。仅此样本，不代表混码或整部剧提速。 |
+| 混合 H.264/HEVC 样本 | 总长约 153.5 秒、4604 帧完整解码；用时 8.800 秒与 8.704 秒基本相当，体积 109.77 MiB 降至 14.96 MiB。 |
+| 正式发行包 | 应用与 DMG 完成 Developer ID 签名、公证及票据装订，发行附件提供 SHA256。 |
 
 </details>
 
-**尚未覆盖：**本轮未进行有声播放或人工观看验收，未对整部剧重新做全量合并，也未验收 Intel Mac 或 Windows。公证和签名检查已完成，但尚未在启用 Gatekeeper 的独立环境中复测安装体验。
+**验证边界：**仅有限样本；未进行主观画质盲评，转码并非无损。本轮没有重新合并整部 72 集，也未验收 Intel Mac 或 Windows。尚未在启用 Gatekeeper 的独立环境中复测安装体验。
 
 ## 常见问题
 
@@ -139,7 +143,7 @@
 <details>
 <summary><strong>源码构建和正式安装包的签名有什么不同？</strong></summary>
 
-正式 v1.1.3 发行包经过 Developer ID 签名与 Apple 公证。默认源码构建使用 ad-hoc 签名，不会自动使用个人开发者证书或提交公证。自行构建的应用可能需要在「系统设置 → 隐私与安全性」确认打开；请先核对来源，无需全局关闭 Gatekeeper。
+正式 v1.1.4 发行包经过 Developer ID 签名与 Apple 公证。默认源码构建使用 ad-hoc 签名，不会自动使用个人开发者证书或提交公证。自行构建的应用可能需要在「系统设置 → 隐私与安全性」确认打开；请先核对来源，无需全局关闭 Gatekeeper。
 
 </details>
 
@@ -164,13 +168,13 @@ npm run build:mac
 | 开发模式 | `npm run dev` |
 | 仅生成 Mac 应用 | `npm run build:mac:dir` |
 | 应用产物 | `dist/mac-arm64/红果短剧.app` |
-| v1.1.3 DMG | `dist/红果短剧-1.1.3-mac-arm64.dmg` |
+| v1.1.4 DMG | `dist/红果短剧-1.1.4-mac-arm64.dmg` |
 
 ### FFmpeg 的准确对应源码
 
 Mac 包内置的 FFmpeg / FFprobe 基于 **FFmpeg 9.0.2** 与 **x264 `b35605ace3ddf7c1a5d67a2eb553f034aef41d55`** 的未修改源码编译。此构建为 **GPLv3-or-later**，仅静态链接 x264，保留 VideoToolbox，未启用 `nonfree`；动态依赖仅为 macOS 系统库，不依赖使用者的 Homebrew 环境。
 
-[对应版本的 Release](https://github.com/jackotom/hongguo-drama-mac/releases/tag/v1.1.3) 附有**应用源码 ZIP**以及独立的 **FFmpeg/x264 完整对应源码包**，后者包含准确源码归档、构建脚本、清单与许可文本。只下载 GitHub 自动生成的项目源码归档，不能代替这一媒体工具对应源码包。
+[对应版本的 Release](https://github.com/jackotom/hongguo-drama-mac/releases/tag/v1.1.4) 附有**应用源码 ZIP**以及独立的 **FFmpeg/x264 完整对应源码包**，后者包含准确源码归档、构建脚本、清单与许可文本。只下载 GitHub 自动生成的项目源码归档，不能代替这一媒体工具对应源码包。
 
 - [FFmpeg 来源、源码校验值与构建说明](build/ffmpeg/MACOS-NOTICE.txt)
 - [准确版本与构建配置](build/ffmpeg/MACOS-VERSIONS.txt)

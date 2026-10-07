@@ -20,17 +20,25 @@ const STATUS_ORDER = {
 };
 
 function sortTasks(list) {
+  const key = task => task.hongguoInfo?.series_id != null ? `series:${task.hongguoInfo.series_id}` : `task:${task.id}`;
+  const groups = new Map();
+  for (const task of list) {
+    const group = groups.get(key(task)) || { rank: 99, time: 0 };
+    group.rank = Math.min(group.rank, STATUS_ORDER[task.status] ?? 99);
+    group.time = Math.max(group.time, task.startTime || 0);
+    groups.set(key(task), group);
+  }
   return [...list].sort((a, b) => {
-    const wa = STATUS_ORDER[a.status] ?? 99;
-    const wb = STATUS_ORDER[b.status] ?? 99;
-    if (wa !== wb) return wa - wb;
-    if (wa <= 1) {
-      return (a.hongguoInfo?.vid_index || 0) - (b.hongguoInfo?.vid_index || 0) || (a.startTime || 0) - (b.startTime || 0);
-    }
-    return (b.endTime || b.startTime || 0) - (a.endTime || a.startTime || 0);
+    const ka = key(a), kb = key(b), ga = groups.get(ka), gb = groups.get(kb);
+    if (ka !== kb) return ga.rank - gb.rank || gb.time - ga.time || ka.localeCompare(kb, 'zh-CN', { numeric: true });
+    return (Number(a.hongguoInfo?.vid_index) || 0) - (Number(b.hongguoInfo?.vid_index) || 0) || (a.startTime || 0) - (b.startTime || 0);
   });
 }
 
+function fmtElapsed(seconds) {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0));
+  return value < 60 ? `${value} 秒` : value < 3600 ? `${Math.floor(value / 60)} 分 ${value % 60} 秒` : `${Math.floor(value / 3600)} 小时 ${Math.floor(value % 3600 / 60)} 分`;
+}
 
 function fmtBytes(bytes) {
   if (!bytes || bytes <= 0) return '0 B';
@@ -44,7 +52,9 @@ function fmtBytes(bytes) {
   return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i];
 }
 
-function DownloadManager({ onNavigate }) {
+const PAGE_SIZE = 100;
+
+function DownloadManager({ onNavigate, active = true }) {
   const [tasks, setTasks] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [toast, setToast] = useState(null);
@@ -55,33 +65,54 @@ function DownloadManager({ onNavigate }) {
   const [mergeTasks, setMergeTasks] = useState([]);
   const [confirmAsk, setConfirmAsk] = useState(null); // 删除确认（可勾选删除本地文件）
   const [mergeAsk, setMergeAsk] = useState(false);    // 合并格式选择
-  const listenersRef = useRef([]);
+  const [page, setPage] = useState(1);
+  const [orderVersion, setOrderVersion] = useState(0);
+  const [loadError, setLoadError] = useState('');
   const toastTimerRef = useRef(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const requests = useRef({ tasks: 0, queue: 0, series: 0, merges: 0 });
+  const taskIndex = useRef(new Map());
 
   const refresh = useCallback(async () => {
-    const list = await window.electronAPI.getDownloadTasks();
-    setTasks(list);
+    const request = ++requests.current.tasks;
+    try {
+      const list = await window.electronAPI.getDownloadTasks();
+      if (!activeRef.current || request !== requests.current.tasks) return;
+      if (!Array.isArray(list)) throw new Error('下载任务读取失败，请重试');
+      setTasks(list);
+      setOrderVersion(value => value + 1);
+      const ids = new Set(list.map(task => task.id));
+      setSelected(previous => new Set([...previous].filter(id => ids.has(id))));
+      setLoadError('');
+    } catch (error) {
+      if (activeRef.current && request === requests.current.tasks) setLoadError(error.message || '下载任务读取失败，请重试');
+    }
   }, []);
 
   const loadQueue = useCallback(async () => {
+    const request = ++requests.current.queue;
     try {
       const q = await window.electronAPI.getQueueStatus();
-      if (q) setQueue(q);
+      if (q && activeRef.current && request === requests.current.queue) setQueue(q);
     } catch (_) {}
   }, []);
 
   const loadSeriesList = useCallback(async () => {
+    const request = ++requests.current.series;
     try {
       const list = (await window.electronAPI.getSeriesList()) || [];
+      if (!activeRef.current || request !== requests.current.series) return;
       setSeriesList(list);
-      setMergeSeriesId((prev) => prev || (list[0] ? String(list[0].series_id) : ''));
+      setMergeSeriesId((prev) => list.some(item => String(item.series_id) === prev) ? prev : (list[0] ? String(list[0].series_id) : ''));
     } catch (_) {}
   }, []);
 
   const loadMergeTasks = useCallback(async () => {
+    const request = ++requests.current.merges;
     try {
       const list = (await window.electronAPI.getMergeTasks()) || [];
-      setMergeTasks(list);
+      if (activeRef.current && request === requests.current.merges) setMergeTasks(list);
     } catch (_) {}
   }, []);
 
@@ -96,70 +127,80 @@ function DownloadManager({ onNavigate }) {
   }, []);
 
   useEffect(() => {
+    if (!active) return;
     refresh();
+    loadQueue();
     loadSeriesList();
     loadMergeTasks();
+    const patches = new Map();
+    let batchTimer = null, fullRefresh = false, reorder = false, seriesDirty = false, queueDirty = false;
+    const schedule = () => {
+      if (batchTimer !== null) return;
+      batchTimer = setTimeout(() => {
+        batchTimer = null;
+        if (fullRefresh) refresh();
+        else if (patches.size) {
+          const updates = new Map(patches);
+          setTasks(previous => previous.map(task => updates.has(task.id) ? { ...task, ...updates.get(task.id) } : task));
+          if (reorder) setOrderVersion(value => value + 1);
+        }
+        if (seriesDirty) loadSeriesList();
+        if (queueDirty) loadQueue();
+        patches.clear();
+        fullRefresh = reorder = seriesDirty = queueDirty = false;
+      }, 200);
+    };
+    const patchTask = (data, status, affectsOrder = false) => {
+      if (!data?.id) return;
+      patches.set(data.id, { ...patches.get(data.id), ...data, status });
+      reorder ||= affectsOrder || taskIndex.current.get(data.id)?.status !== status;
+      schedule();
+    };
     const cleanups = [
       window.electronAPI.onDownloadProgress((data) => {
-        setTasks((prev) =>
-          prev.map((t) => (t.id === data.id ? { ...t, progress: data.progress, receivedBytes: data.receivedBytes, totalBytes: data.totalBytes, status: 'downloading' } : t))
-        );
+        patchTask(data, 'downloading');
       }),
-      window.electronAPI.onDownloadTaskAdded(() => refresh()),
+      window.electronAPI.onDownloadTaskAdded(() => { fullRefresh = seriesDirty = true; schedule(); }),
       window.electronAPI.onDownloadCompleted((data) => {
-        setTasks((prev) => prev.map((t) => (t.id === data.id ? { ...t, status: 'completed', progress: 100 } : t)));
+        patchTask({ ...data, progress: 100 }, 'completed', true);
       }),
       window.electronAPI.onDownloadFailed((data) => {
-        setTasks((prev) => prev.map((t) => (t.id === data.id ? { ...t, status: 'failed', error: data.error } : t)));
+        patchTask(data, 'failed', true);
       }),
       window.electronAPI.onDownloadStopped((data) => {
-        setTasks((prev) => prev.map((t) => (t.id === data.id ? { ...t, status: 'stopped' } : t)));
+        patchTask(data, 'stopped', true);
       }),
       window.electronAPI.onDownloadQueueChanged(() => {
-        refresh();
-        loadQueue();
+        fullRefresh = queueDirty = true;
+        schedule();
       }),
       window.electronAPI.onMergeTaskAdded(() => loadMergeTasks()),
       window.electronAPI.onMergeProgress((data) => {
         setMergeTasks((prev) =>
-          prev.map((t) => (t.id === data.id ? { ...t, progress: data.progress, done: data.done ?? t.done, status: 'running' } : t))
+          prev.map((t) => (t.id === data.id ? { ...t, ...data } : t))
         );
       }),
       window.electronAPI.onMergeCompleted((data) => {
         loadMergeTasks();
-        showToast('合并完成：' + (data.path ? data.path.split('\\').pop() : ''));
+        showToast(data.storageWarning || ('合并完成：' + (data.path ? data.path.split(/[\\/]/).pop() : '')), data.storageWarning ? 'error' : 'success');
       }),
       window.electronAPI.onMergeFailed((data) => {
         loadMergeTasks();
         showToast('合并失败：' + (data.error || '未知错误'), 'error');
       }),
     ];
-    listenersRef.current = cleanups;
-    return () => cleanups.forEach((c) => c());
-  }, [refresh, loadQueue, loadMergeTasks, showToast]);
-
-  // 队列状态轮询：让「进行中 x / 并发上限 y」实时可见
-  useEffect(() => {
-    refresh();
-    loadSeriesList();
-    loadMergeTasks();
-  }, [refresh, loadSeriesList, loadMergeTasks]);
-
-  // 队列状态轮询：让「进行中 x / 并发上限 y」实时可见
-  useEffect(() => {
-    loadQueue();
     const timer = setInterval(() => {
       loadQueue();
-      // 并发任务完成时状态需要刷新（completed/failed 事件已覆盖，这里兜底）
       refresh();
-      // 合并进度兜底刷新
-      setMergeTasks((prev) => {
-        if (prev.some((t) => t.status === 'running')) loadMergeTasks();
-        return prev;
-      });
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [loadQueue, refresh, loadMergeTasks]);
+      loadMergeTasks();
+    }, 15000);
+    return () => {
+      cleanups.forEach(cleanup => cleanup());
+      clearInterval(timer);
+      clearTimeout(batchTimer);
+      for (const key of Object.keys(requests.current)) requests.current[key]++;
+    };
+  }, [active, refresh, loadQueue, loadSeriesList, loadMergeTasks, showToast]);
 
   const toggleSelect = (id) => {
     const next = new Set(selected);
@@ -169,11 +210,6 @@ function DownloadManager({ onNavigate }) {
   };
 
   const clearSelection = () => setSelected(new Set());
-
-  const deleteTask = async (id) => {
-    await window.electronAPI.deleteTask(id);
-    refresh();
-  };
 
   const fmtSize = (b) => {
     if (!b || b <= 0) return '0 B';
@@ -197,15 +233,15 @@ function DownloadManager({ onNavigate }) {
       withFile,
       estBytes,
       onOk: async (deleteFiles) => {
-        const ids = items.map((t) => t.id);
-        const res = await window.electronAPI.deleteTasksWithFiles(ids, deleteFiles);
-        setSelected(new Set());
-        await refresh();
-        if (res && res.success) {
+        try {
+          const ids = items.map((t) => t.id);
+          const res = await window.electronAPI.deleteTasksWithFiles(ids, deleteFiles);
+          if (!res?.success) throw new Error(res?.error || '删除失败，请重试');
+          await refresh();
           showToast(deleteFiles
             ? `已删除 ${res.count} 个任务，释放 ${fmtSize(res.freed)}`
             : `已删除 ${res.count} 个任务记录（本地文件已保留）`);
-        }
+        } catch (error) { showToast(error.message || '删除失败，请重试', 'error'); }
       },
     });
   };
@@ -242,10 +278,10 @@ function DownloadManager({ onNavigate }) {
       }
       await loadMergeTasks();
       const sizeGb = (res.totalBytes / 1073741824).toFixed(2);
-      const mins = Math.round(res.totalDuration / 60);
+      const duration = res.totalDuration > 0 ? ` / ${fmtElapsed(res.totalDuration)}` : ' / 时长待探测';
       showToast(compatible
         ? `开始兼容格式合并 ${res.count} 集（H.264，耗时较长）`
-        : `开始合并 ${res.count} 集（约 ${sizeGb} GB / ${mins} 分钟）`);
+        : `开始合并 ${res.count} 集（约 ${sizeGb} GB${duration}）`);
       if (res.codecWarning) showToast(res.codecWarning, 'error');
     } catch (e) {
       showToast('合并异常: ' + e.message, 'error');
@@ -255,9 +291,12 @@ function DownloadManager({ onNavigate }) {
   };
 
   const cancelMerge = async (id) => {
-    await window.electronAPI.cancelMerge(id);
-    await loadMergeTasks();
-    showToast('已取消合并');
+    try {
+      const result = await window.electronAPI.cancelMerge(id);
+      if (!result?.success) throw new Error(result?.error || '取消请求失败，请重试');
+      showToast('取消请求已发送，正在等待合并停止。');
+      await loadMergeTasks();
+    } catch (error) { showToast(error.message || '取消请求失败，请重试', 'error'); }
   };
 
   const openMergedFile = async (path) => {
@@ -311,7 +350,13 @@ function DownloadManager({ onNavigate }) {
     askDelete(done, '清空已完成任务');
   };
 
-  const sortedTasks = useMemo(() => sortTasks(tasks), [tasks]);
+  // Progress updates change row values, not the established series/episode order.
+  const sortedIds = useMemo(() => sortTasks(tasks).map(task => task.id), [orderVersion]);
+  const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks]);
+  taskIndex.current = taskById;
+  const pageCount = Math.max(1, Math.ceil(sortedIds.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const visibleTasks = sortedIds.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE).map(id => taskById.get(id)).filter(Boolean);
 
   const activeCount = tasks.filter((t) => t.status === 'downloading' || t.status === 'pending').length;
   const completedCount = tasks.filter((t) => t.status === 'completed').length;
@@ -331,13 +376,13 @@ function DownloadManager({ onNavigate }) {
   const retryableSelectedCount = useMemo(
     () =>
       Array.from(selected).filter((id) => {
-        const t = tasks.find((x) => x.id === id);
+        const t = taskById.get(id);
         return t && (t.status === 'failed' || t.status === 'stopped');
       }).length,
-    [selected, tasks]
+    [selected, taskById]
   );
 
-  useDialogKeyboard(!!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); setMergeAsk(false); }, '.player-confirm');
+  useDialogKeyboard(active && !!(confirmAsk || mergeAsk), () => { setConfirmAsk(null); setMergeAsk(false); }, '.dm-container .player-confirm');
 
   return (
     <div className="dm-container">
@@ -459,19 +504,26 @@ function DownloadManager({ onNavigate }) {
                   合并《{m.seriesTitle}》· {m.done || 0}/{m.total} 集
                 </div>
                 <div className="merge-sub">
-                  {m.status === 'running' && <>正在合并… {m.progress || 0}%</>}
+                  {m.status === 'running' && <>{m.stageText || '正在合并'}{m.method && m.method !== m.stageText ? ` · ${m.method}` : ''}</>}
                   {m.status === 'completed' && (
                     <>
                       已完成 · {m.outputName}
-                      {m.outputBytes ? ` · ${(m.outputBytes / 1073741824).toFixed(2)} GB` : ''}
+                      {m.outputBytes ? ` · ${fmtBytes(m.outputBytes)}` : ''}
                     </>
                   )}
                   {m.status === 'failed' && <>失败：{m.error}</>}
-                  {m.status === 'stopped' && <>已取消</>}
+                  {m.status === 'stopped' && <>{m.error || '已取消'}</>}
                 </div>
+                <div className="merge-metrics">
+                  <span>{m.stage === 'checking' ? `已检查 ${m.checked || 0}` : `已处理 ${m.done || 0}`} / {m.total} 集</span>
+                  <span>用时 {fmtElapsed(m.status === 'running' ? (Date.now() - m.startTime) / 1000 : m.elapsedSeconds || ((m.endTime || m.startTime) - m.startTime) / 1000)}</span>
+                  {m.status === 'running' && m.speed > 0 && <span>{m.speed.toFixed(1)} 倍速</span>}
+                  {m.status === 'running' && Number.isFinite(m.etaSeconds) && <span>本阶段约剩 {fmtElapsed(m.etaSeconds)}</span>}
+                </div>
+                {(m.codecWarning || m.storageWarning || m.cleanupWarning) && <div className="merge-note">{m.storageWarning || m.cleanupWarning || m.codecWarning}</div>}
                 {(m.status === 'running') && (
                   <div className="dm-progress">
-                    <div className="dm-progress-bar">
+                    <div className="dm-progress-bar" role="progressbar" aria-label="合并进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={m.progress || 0}>
                       <div className="dm-progress-fill" style={{ width: `${m.progress || 0}%` }} />
                     </div>
                     <span className="dm-pct">{m.progress || 0}%</span>
@@ -494,8 +546,11 @@ function DownloadManager({ onNavigate }) {
                     className="icon-btn icon-btn-danger"
                     title="移除记录"
                     onClick={async () => {
-                      await window.electronAPI.deleteMergeTask(m.id);
-                      loadMergeTasks();
+                      try {
+                        const result = await window.electronAPI.deleteMergeTask(m.id);
+                        if (!result?.success) throw new Error(result?.error || '移除记录失败');
+                        await loadMergeTasks();
+                      } catch (error) { showToast(error.message || '移除记录失败，请重试', 'error'); }
                     }}
                   >
                     <Trash2 size={16} />
@@ -527,7 +582,17 @@ function DownloadManager({ onNavigate }) {
         </div>
       )}
 
-      {sortedTasks.length === 0 ? (
+      {loadError && <div className="alert alert-error" role="alert">{loadError}<button className="btn btn-outline btn-sm" onClick={refresh}>重新加载</button></div>}
+      {tasks.length > 0 && <div className="dm-pagination">
+        <span>共 {tasks.length} 项 · 当前 {(currentPage - 1) * PAGE_SIZE + 1}-{Math.min(currentPage * PAGE_SIZE, tasks.length)} 项{selected.size > 0 ? ` · 已选 ${selected.size} 项（跨页保留）` : ''}</span>
+        <nav aria-label="下载任务分页">
+          <button className="btn btn-outline btn-sm" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button>
+          <span>第 {currentPage} / {pageCount} 页</span>
+          <button className="btn btn-outline btn-sm" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>下一页</button>
+        </nav>
+      </div>}
+
+      {tasks.length === 0 ? (
         <div className="dm-empty">
           <Download size={40} />
           <p>暂无下载任务</p>
@@ -536,7 +601,7 @@ function DownloadManager({ onNavigate }) {
         </div>
       ) : (
         <div className="dm-list">
-          {sortedTasks.map((task) => {
+          {visibleTasks.map((task) => {
 
             const isSel = selected.has(task.id);
             const isActive = task.status === 'downloading' || task.status === 'pending';
@@ -602,7 +667,7 @@ function DownloadManager({ onNavigate }) {
       )}
 
       {toast && (
-        <div className={`dm-toast dm-toast-${toast.type}`} onClick={() => setToast(null)}>
+        <div className={`dm-toast dm-toast-${toast.type}`} role={toast.type === 'error' ? 'alert' : 'status'} onClick={() => setToast(null)}>
           {toast.text}
         </div>
       )}
@@ -617,8 +682,8 @@ function DownloadManager({ onNavigate }) {
             </div>
             <div className="player-confirm-msg">
               <p>把该剧已下载的分集合并为一个 mp4。</p>
-              <p><b>快速合并</b>：保留原画质与编码，处理较快；部分设备可能不支持播放。</p>
-              <p><b>兼容合并</b>：转换为兼容性更好的 H.264 格式，处理时间较长。</p>
+              <p><b>智能快速合并</b>：格式一致时无损合并；不一致时只处理必要的音视频，耗时取决于总时长。</p>
+              <p><b>兼容合并</b>：导出 H.264/AAC，已经兼容的分集无需重复转换。两种方式都保留原文件。</p>
             </div>
             <div className="player-confirm-foot">
               <button className="btn btn-outline" onClick={() => setMergeAsk(false)}>取消</button>
@@ -626,7 +691,7 @@ function DownloadManager({ onNavigate }) {
                 兼容合并（H.264）
               </button>
               <button className="btn btn-primary" onClick={() => doMerge(false)} disabled={merging}>
-                快速合并
+                智能快速合并
               </button>
             </div>
           </div>

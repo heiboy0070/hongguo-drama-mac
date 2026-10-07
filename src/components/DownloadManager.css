@@ -196,6 +196,23 @@
   flex-shrink: 0;
 }
 
+.merge-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.merge-note {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 /* 删除确认里的勾选项 */
 .dm-confirm-check {
   display: flex;
@@ -443,4 +460,7 @@
 .dm-progress-bar { height: 4px; }
 .dm-error { white-space: normal; overflow-wrap: anywhere; }
 .dm-task-meta { flex-wrap: wrap; }
+.dm-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dm-pagination nav { display: flex; align-items: center; gap: 10px; }
+.dm-container .alert .btn { margin-left: 12px; }
 @media (max-width: 900px) { .dm-header { flex-direction: column; gap: 12px; } .dm-stats { padding-top: 0; } .merge-inline { margin-left: 0; } }

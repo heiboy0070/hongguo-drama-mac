@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 兼容模式（HEVC -> H.264 转码，解决「黑屏有声」）
   transcodeForPlayback: (payload) => ipcRenderer.invoke('transcode-for-playback', payload),
+  cancelTranscodeForPlayback: (payload) => ipcRenderer.invoke('cancel-transcode-for-playback', payload),
   compatCacheStatus: () => ipcRenderer.invoke('compat-cache-status'),
   clearCompatCache: () => ipcRenderer.invoke('clear-compat-cache'),
   decodeCapability: () => ipcRenderer.invoke('decode-capability'),
@@ -92,6 +93,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+  onStorageError: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on('storage-error', listener);
+    return () => ipcRenderer.removeListener('storage-error', listener);
+  },
 
   // 网络代理
   getProxyStatus: () => ipcRenderer.invoke('get-proxy-status'),

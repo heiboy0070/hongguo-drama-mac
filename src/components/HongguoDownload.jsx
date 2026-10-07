@@ -2,9 +2,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import './HongguoDownload.css';
 import { Film, Download, CheckSquare, Square, RefreshCw, Folder, Link2, Search } from './icons';
 import SearchPanel from './SearchPanel';
+import { isSubmitKey, parseEpisodeRange } from './episodeRange';
 
 
-function HongguoDownload({ onNavigate }) {
+function HongguoDownload({ onNavigate, active = true }) {
   const [tab, setTab] = useState('search'); // 'search' | 'input'
   const [inputUrl, setInputUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -17,6 +18,7 @@ function HongguoDownload({ onNavigate }) {
   const [rangeInput, setRangeInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const resolveRequest = useRef(0);
+  const pendingResolve = useRef(null);
   const searchVersion = resolveRequest.current;
 
   useEffect(() => () => { resolveRequest.current++; }, []);
@@ -24,6 +26,7 @@ function HongguoDownload({ onNavigate }) {
   const switchTab = (next) => {
     if (next === tab) return;
     resolveRequest.current++;
+    pendingResolve.current = null;
     setLoading(false);
     setTab(next);
   };
@@ -39,7 +42,7 @@ function HongguoDownload({ onNavigate }) {
     setSeriesData(data);
     setSelectedVids(new Set(data.episodes.filter((ep) => !ep.locked).map((ep) => ep.vid)));
     setSuccessMsg(`已选中《${data.series_title}》共 ${data.total} 集，可直接提交下载`);
-    document.querySelector('.main-content')?.scrollTo({ top: 0, behavior: 'smooth' });
+    document.querySelector('.main-content:not([hidden])')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // 解析红果短剧
@@ -48,7 +51,10 @@ function HongguoDownload({ onNavigate }) {
       setErrorMsg('请输入红果短剧分享链接或剧集 ID');
       return;
     }
+    const value = inputUrl.trim();
+    if (pendingResolve.current?.value === value) return;
     const request = ++resolveRequest.current;
+    pendingResolve.current = { value, request };
     setRangeInput('');
     setLoading(true);
     setErrorMsg('');
@@ -57,7 +63,7 @@ function HongguoDownload({ onNavigate }) {
     setSelectedVids(new Set());
 
     try {
-      const res = await window.electronAPI.hongguoResolve(inputUrl.trim());
+      const res = await window.electronAPI.hongguoResolve(value);
       if (request !== resolveRequest.current) return;
       if (res?.success && res.data) {
         setSeriesData(res.data);
@@ -71,6 +77,7 @@ function HongguoDownload({ onNavigate }) {
     } catch (err) {
       if (request === resolveRequest.current) setErrorMsg('解析过程出现错误: ' + err.message);
     } finally {
+      if (pendingResolve.current?.request === request) pendingResolve.current = null;
       if (request === resolveRequest.current) setLoading(false);
     }
   };
@@ -128,26 +135,12 @@ function HongguoDownload({ onNavigate }) {
 
   // 根据区间字符串应用筛选 (如 "1-30" 或 "1,5,10-20")
   const handleApplyRange = () => {
-    if (!seriesData || !seriesData.episodes || !rangeInput.trim()) return;
-    const total = seriesData.episodes.length;
-    const nums = new Set();
-    const parts = rangeInput.split(',');
-    for (let part of parts) {
-      part = part.trim();
-      if (part.includes('-')) {
-        const [a, b] = part.split('-').map((n) => parseInt(n.trim(), 10));
-        if (!isNaN(a) && !isNaN(b)) {
-          for (let i = Math.max(1, Math.min(a, b)); i <= Math.min(total, Math.max(a, b)); i++) {
-            nums.add(i);
-          }
-        }
-      } else {
-        const n = parseInt(part, 10);
-        if (!isNaN(n) && n >= 1 && n <= total) nums.add(n);
-      }
-    }
-    const selectedEps = seriesData.episodes.filter((ep) => !ep.locked && nums.has(ep.vid_index));
-    setSelectedVids(new Set(selectedEps.map((ep) => ep.vid)));
+    if (!seriesData?.episodes) return;
+    try {
+      const nums = parseEpisodeRange(rangeInput, seriesData.episodes.length);
+      setSelectedVids(new Set(seriesData.episodes.filter((ep) => !ep.locked && nums.has(ep.vid_index)).map((ep) => ep.vid)));
+      setErrorMsg('');
+    } catch (error) { setErrorMsg(error.message); }
   };
 
   // 提交批量下载
@@ -209,12 +202,14 @@ function HongguoDownload({ onNavigate }) {
         </button>
       </div>
 
-      {tab === 'search' ? (
+      <div hidden={tab !== 'search'}>
         <SearchPanel
+          active={active && tab === 'search'}
           onSelectSeries={handleSeriesFromSearch}
           onSwitchToInput={() => switchTab('input')}
         />
-      ) : (
+      </div>
+      {tab === 'input' && (
         /* 解析输入卡片 */
         <div className="hongguo-card">
           <div className="card-header-title">
@@ -228,8 +223,8 @@ function HongguoDownload({ onNavigate }) {
               aria-label="短剧分享链接或剧集 ID"
               placeholder="粘贴短剧分享链接，或输入剧集 ID"
               value={inputUrl}
-              onChange={(e) => { resolveRequest.current++; setLoading(false); setInputUrl(e.target.value); }}
-              onKeyDown={(e) => e.key === 'Enter' && handleResolve()}
+              onChange={(e) => { resolveRequest.current++; pendingResolve.current = null; setLoading(false); setInputUrl(e.target.value); }}
+              onKeyDown={(e) => isSubmitKey(e) && handleResolve()}
             />
             <button className="btn btn-primary" onClick={handleResolve} disabled={loading}>
               {loading ? (
@@ -327,7 +322,7 @@ function HongguoDownload({ onNavigate }) {
                 placeholder="如 1-30 或 1,5,10"
                 value={rangeInput}
                 onChange={(e) => setRangeInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleApplyRange()}
+                onKeyDown={(e) => isSubmitKey(e) && handleApplyRange()}
               />
               <button className="btn-chip btn-chip-primary" onClick={handleApplyRange}>应用</button>
             </div>

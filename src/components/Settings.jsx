@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
 import './Settings.css';
 import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
@@ -7,7 +7,6 @@ import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './ico
 const FORMAT_PRESETS = [
   { label: '剧名_第N集', value: '剧名 集数' },
   { label: '剧名_第N集_标题', value: '剧名 集数 标题' },
-  { label: '仅剧名', value: '剧名' },
 ];
 
 const PROXY_MODES = [
@@ -42,38 +41,89 @@ function describeProxy(settings) {
   return { on: true, text: '跟随系统 / 环境变量代理' };
 }
 
-function SettingsPage() {
+function SettingsPage({ active = true }) {
   const [settings, setSettings] = useState(null);
   const [saved, setSaved] = useState(false);
   const [proxyOpen, setProxyOpen] = useState(false);
   const [proxyDraft, setProxyDraft] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const testVersion = useRef(0);
+  const savingRef = useRef(false);
+  const savedTimer = useRef(null);
+
+  const loadSettings = async () => {
+    setLoadError('');
+    try { setSettings(await window.electronAPI.getSettings()); }
+    catch (error) { setLoadError(error.message || '设置加载失败，请重试'); }
+  };
 
   useEffect(() => {
-    window.electronAPI.getSettings().then(setSettings);
+    loadSettings();
+    return () => { testVersion.current++; clearTimeout(savedTimer.current); };
   }, []);
+
+  useEffect(() => {
+    if (!active) { testVersion.current++; setTesting(false); setTestResult(null); }
+  }, [active]);
 
   const update = (key, value) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
     setSaved(false);
+    setDirty(true);
+    setSaveError('');
   };
 
   const selectFolder = async () => {
-    const dir = await window.electronAPI.selectFolder();
-    if (dir) update('root', dir);
+    try {
+      const dir = await window.electronAPI.selectFolder();
+      if (dir) update('root', dir);
+    } catch (error) { setSaveError(error.message || '文件夹选择失败，请重试'); }
   };
 
-  const save = async () => {
-    const res = await window.electronAPI.saveSettings(settings);
-    if (res && res.success) {
+  const persist = async (next, isProxy = false) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setSaved(false);
+    setSaveError('');
+    try {
+      // Playback options may change while this retained settings page is hidden.
+      const current = await window.electronAPI.getSettings();
+      const editable = ['root', 'name_format', 'max_concurrent', 'proxy_enabled', 'proxy_mode', 'proxy_host', 'proxy_port', 'proxy_username', 'proxy_password'];
+      const submitted = { ...current };
+      for (const key of editable) if (Object.hasOwn(next, key)) submitted[key] = next[key];
+      const res = await window.electronAPI.saveSettings(submitted);
+      if (!res?.success) throw new Error(res?.error || '设置未保存，请重试');
+      setSettings(submitted);
+      if (isProxy) closeProxy();
+      setDirty(false);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 2000);
+    } catch (error) {
+      setSaveError(error.message || '设置保存失败，请重试');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
+  };
+  const save = () => persist(settings);
+
+  const closeProxy = () => {
+    testVersion.current++;
+    setTesting(false);
+    setProxyOpen(false);
+    setTestResult(null);
   };
 
   // ===== 代理弹窗 =====
   const openProxyModal = () => {
+    testVersion.current++;
     setProxyDraft({
       proxy_enabled: settings.proxy_enabled === true,
       proxy_mode: settings.proxy_mode || 'system',
@@ -83,42 +133,37 @@ function SettingsPage() {
       proxy_password: settings.proxy_password || '',
     });
     setTestResult(null);
+    setSaveError('');
     setProxyOpen(true);
   };
 
   const patchDraft = (key, value) => {
+    testVersion.current++;
     setProxyDraft((prev) => ({ ...prev, [key]: value }));
+    setTesting(false);
     setTestResult(null);
   };
 
   const runTest = async () => {
+    const request = ++testVersion.current;
     setTesting(true);
     setTestResult(null);
     try {
       const res = await window.electronAPI.testProxy(proxyDraft);
-      setTestResult(res);
+      if (request === testVersion.current) setTestResult(res);
     } catch (e) {
-      setTestResult({ success: false, error: e.message });
+      if (request === testVersion.current) setTestResult({ success: false, error: e.message });
     } finally {
-      setTesting(false);
+      if (request === testVersion.current) setTesting(false);
     }
   };
 
-  const applyProxy = async () => {
-    const next = { ...settings, ...proxyDraft };
-    const res = await window.electronAPI.saveSettings(next);
-    if (res && res.success) {
-      setSettings(next);
-      setProxyOpen(false);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    }
-  };
+  const applyProxy = () => persist({ ...settings, ...proxyDraft }, true);
 
-  useDialogKeyboard(proxyOpen, () => setProxyOpen(false), '.proxy-modal');
+  useDialogKeyboard(active && proxyOpen, () => { if (!savingRef.current) closeProxy(); }, '.proxy-modal');
 
   if (!settings) {
-    return <div className="settings-container">加载中...</div>;
+    return <div className="settings-container">{loadError ? <div role="alert"><p>{loadError}</p><button className="btn btn-outline" onClick={loadSettings}>重新加载</button></div> : '加载中...'}</div>;
   }
 
   const proxyInfo = describeProxy(settings);
@@ -131,7 +176,7 @@ function SettingsPage() {
         <div><h2>设置</h2><p className="page-description">让下载、保存和网络连接，按你的习惯运行。</p></div>
       </div>
 
-      <div className="settings-card">
+      <fieldset className="settings-card" disabled={saving}>
         <div className="settings-group">
           <label className="settings-label">下载目录</label>
           <div className="folder-row">
@@ -173,6 +218,7 @@ function SettingsPage() {
           />
           <p className="settings-hint">
             可用变量：<code>剧名</code> · <code>集数</code>（如 001）· <code>标题</code>
+            。每集保留独立集号，避免同名覆盖。
           </p>
         </div>
 
@@ -212,26 +258,28 @@ function SettingsPage() {
         </div>
 
         <div className="settings-footer">
+          {dirty && <span className="settings-hint" role="status">有未保存的修改</span>}
           <button className="btn btn-primary" onClick={save}>
-            {saved ? <><Check size={16} /> 已保存</> : '保存设置'}
+            {saving ? '正在保存…' : saved ? <><Check size={16} /> 已保存</> : '保存设置'}
           </button>
         </div>
-      </div>
+        {saveError && !proxyOpen && <p className="alert alert-error" role="alert">{saveError}</p>}
+      </fieldset>
 
       {proxyOpen && proxyDraft && (
-        <div className="proxy-modal-mask" onClick={() => setProxyOpen(false)}>
+        <div className="proxy-modal-mask" onClick={() => !saving && closeProxy()}>
           <div className="proxy-modal" role="dialog" aria-modal="true" aria-label="网络代理设置" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
             <div className="proxy-modal-head">
               <div className="proxy-modal-title">
                 <Globe size={18} />
                 <span>网络代理设置</span>
               </div>
-              <button className="icon-btn" title="关闭" onClick={() => setProxyOpen(false)}>
+              <button className="icon-btn" title="关闭" disabled={saving} onClick={closeProxy}>
                 <X size={16} />
               </button>
             </div>
 
-            <div className="proxy-modal-body">
+            <fieldset className="proxy-modal-body" disabled={saving}>
               <label className="proxy-switch-row">
                 <input
                   type="checkbox"
@@ -351,18 +399,19 @@ function SettingsPage() {
                   </span>
                 </div>
               )}
-            </div>
+              {saveError && <p className="alert alert-error" role="alert">{saveError}</p>}
+            </fieldset>
 
             <div className="proxy-modal-foot">
-              <button className="btn btn-outline" onClick={runTest} disabled={testing}>
+              <button className="btn btn-outline" onClick={runTest} disabled={testing || saving}>
                 <RefreshCw size={15} />
                 {testing ? '测试中...' : '测试连接'}
               </button>
               <div className="proxy-foot-right">
-                <button className="btn btn-outline" onClick={() => setProxyOpen(false)}>取消</button>
-                <button className="btn btn-primary" onClick={applyProxy}>
+                <button className="btn btn-outline" disabled={saving} onClick={closeProxy}>取消</button>
+                <button className="btn btn-primary" disabled={saving} onClick={applyProxy}>
                   <Check size={15} />
-                  保存并生效
+                  {saving ? '正在保存…' : '保存并生效'}
                 </button>
               </div>
             </div>

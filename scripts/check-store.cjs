@@ -16,7 +16,7 @@ try {
     throw new Error('simulated disk full');
   };
   console.error = () => {};
-  store.saveTasks([{ id: 'pending' }]);
+  assert.throws(() => store.saveTasks([{ id: 'pending' }]), /simulated disk full/);
   assert.equal(fs.readFileSync(file, 'utf8'), before, 'failed write must preserve the last complete state');
   fs.writeFileSync = write;
   store.saveTasks([{ id: 'complete' }]);

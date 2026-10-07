@@ -1,0 +1,104 @@
+// Offline behavioral checks. All files live in a disposable directory; no app data/network.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
+const { createRequire } = require('node:module');
+const source = path.resolve(__dirname, '../main.js'), req = createRequire(source);
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hongguo-safety-'));
+let serial = 0, failures = 0;
+function load(settings = {}, overrides = {}) {
+  const dir = path.join(root, String(++serial)); fs.mkdirSync(dir);
+  const handlers = {}, app = new EventEmitter();
+  Object.assign(app, { getVersion: () => 'test', getPath: () => dir, commandLine: { appendSwitch() {} }, whenReady: () => ({ then() {} }) });
+  const electron = { app, ipcMain: { handle: (name, fn) => handlers[name] = fn }, protocol: { registerSchemesAsPrivileged() {} } };
+  const store = { getSettings: () => ({ root: dir, ...settings }), saveTasks() {}, saveSeries() {}, saveSettings() {} };
+  const context = vm.createContext({ require: name => overrides[name] || (name === 'electron' ? electron : name === './src/store' ? store : req(name)), __dirname: path.dirname(source), process: { ...process, env: { ...process.env } }, console: { log() {}, warn() {}, error() {} }, Buffer, URL, Response, Request, Headers, AbortController, setTimeout, clearTimeout });
+  vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source });
+  const pump = context.pumpQueue;
+  context.pumpQueue = () => {}; // Inspect queued destinations without fetching media.
+  return { context, handlers, dir, pump, run: code => vm.runInContext(code, context), set(name, value) { context.fixture = value; vm.runInContext(`${name} = fixture`, context); } };
+}
+function task(id, dir, status = 'completed', filename = `${id}.mp4`, index = 1) {
+  return { id, type: 'hongguo', status, filename, savePath: path.join(dir, filename), customDir: dir, hongguoInfo: { vid: id, series_id: 'S', series_title: 'Short', vid_index: index } };
+}
+function series() { return [{ series_id: 'S', series_title: 'Short', episodes: [{ vid: 'one', vid_index: 1 }, { vid: 'two', vid_index: 2 }] }]; }
+function file(p) { fs.writeFileSync(p, Buffer.alloc(120000)); }
+async function check(name, run) { try { await run(); console.log('PASS ' + name); } catch (error) { failures++; console.error('FAIL ' + name + ': ' + error.message); } }
+(async () => {
+  await check('title-only preset keeps episode destinations unique', async () => {
+    const h = load({ name_format: '剧名' });
+    await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: series()[0].episodes });
+    const paths = h.run('downloadTasks.map(task => task.savePath)');
+    assert.equal(new Set(paths).size, 2, 'different episodes must not share a final or temporary path');
+  });
+  await check('same-title series use independent directories; legacy records still resolve', () => {
+    const h = load();
+    assert.notEqual(h.context.seriesDownloadDir(h.dir, 'S1', 'Short'), h.context.seriesDownloadDir(h.dir, 'S2', 'Short'));
+    const old = task('old', h.dir); file(old.savePath); h.set('downloadTasks', [old]);
+    assert.equal(h.context.collectSeriesEpisodeFiles('S', 'Short').ordered[0].path, old.savePath);
+  });
+  await check('missing completed file is shown missing and can be downloaded again', async () => {
+    const h = load(); h.set('seriesRegistry', series()); h.set('downloadTasks', [task('one', h.dir)]);
+    const detail = await h.handlers['get-series-episodes']({}, 'S');
+    assert.equal(detail.data.episodes[0].status, 'missing', 'a missing file cannot remain completed');
+    const added = await h.context.enqueueEpisodes({ seriesId: 'S', seriesTitle: 'Short', episodes: [series()[0].episodes[0]] });
+    assert.equal(added, 1); assert.equal(h.run('downloadTasks.length'), 1); assert.equal(h.run('downloadTasks[0].status'), 'pending');
+  });
+  await check('delete downloaded files preserves active and waiting downloads', async () => {
+    const h = load(); const completed = task('one', h.dir), active = task('two', h.dir, 'downloading', 'two.mp4', 2), waiting = task('three', h.dir, 'pending', 'three.mp4', 3);
+    file(completed.savePath); h.set('seriesRegistry', series()); h.set('downloadTasks', [completed, active, waiting]); h.set('downloadQueue', [waiting]);
+    const result = await h.handlers['delete-all-downloaded']({});
+    assert.equal(result.success, true); assert.equal(fs.existsSync(completed.savePath), false);
+    assert.equal(h.run('downloadTasks.some(task => task.id === "two")'), true, 'active task disappeared');
+    assert.equal(h.run('downloadQueue.some(task => task.id === "three")'), true, 'waiting task disappeared');
+  });
+  await check('auto-delete uses task identity with title suffixes', async () => {
+    const h = load(); const one = task('one', h.dir, 'completed', 'Short 001 Reunion.mp4');
+    const two = task('two', h.dir, 'completed', 'Short 002 Story 001.mp4', 2);
+    file(one.savePath); file(two.savePath); h.set('seriesRegistry', series()); h.set('downloadTasks', [one, two]);
+    const result = await h.handlers['delete-episode-file']({}, 'S', 1);
+    assert.equal(result.count, 1); assert.equal(fs.existsSync(one.savePath), false, 'target episode remains');
+    assert.equal(fs.existsSync(two.savePath), true, 'unrelated episode was deleted by title digits');
+  });
+  await check('explicit task deletion waits for an active lookup to finish cancelling', async () => {
+    let finishLookup;
+    const h = load({}, { './src/native/hongguo': { fetchPlayUrlSingle: () => new Promise(resolve => { finishLookup = resolve; }) } });
+    const one = task('one', h.dir, 'pending'); h.set('downloadTasks', [one]); h.set('downloadQueue', [one]); h.pump();
+    const deleting = h.handlers['delete-task']({}, 'one', { deleteFiles: true });
+    assert.equal(h.run('downloadTasks.length'), 1, 'record removed before its active run settled');
+    finishLookup({ url: null }); await deleting;
+    assert.equal(h.run('downloadTasks.length'), 0); assert.equal(h.run('runningDownloads.size'), 0);
+  });
+  await check('failed file deletion keeps the task record', async () => {
+    const denied = Object.create(fs); denied.unlinkSync = () => { throw new Error('permission denied'); };
+    const h = load({}, { fs: denied }); const one = task('one', h.dir, 'completed', 'Short 001.mp4');
+    file(one.savePath); h.set('seriesRegistry', series()); h.set('downloadTasks', [one]);
+    const result = await h.handlers['delete-episode-file']({}, 'S', 1);
+    assert.ok(result.success === false || result.failed > 0, 'deletion failure must reach caller');
+    assert.equal(h.run('downloadTasks.length'), 1, 'failed deletion lost its recovery record');
+  });
+  await check('store save failure is reported and retains the durable snapshot', () => {
+    const dir = path.join(root, 'store'); fs.mkdirSync(dir); const target = path.join(dir, 'data.json');
+    let fail = false; const fakeFs = Object.create(fs); fakeFs.writeFileSync = (...args) => { if (fail) throw new Error('simulated disk full'); return fs.writeFileSync(...args); };
+    const context = vm.createContext({ require: name => name === 'fs' ? fakeFs : req(name), module: { exports: {} }, console: { error() {} } });
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../src/store.js'), 'utf8'), context);
+    const store = context.module.exports; store.init(target); store.saveTasks([{ id: 'saved' }]); const before = fs.readFileSync(target, 'utf8'); fail = true;
+    assert.throws(() => store.saveTasks([{ id: 'unsaved' }]), /simulated disk full/);
+    assert.equal(fs.readFileSync(target, 'utf8'), before); assert.equal(store.getTasks()[0].id, 'saved');
+  });
+  await check('proxy status and test result never expose credentials', async () => {
+    const settings = { proxy_enabled: true, proxy_mode: 'custom', proxy_host: '127.0.0.1', proxy_port: 7890, proxy_username: 'test-user', proxy_password: 'secret-fixture' };
+    const h = load(settings, { axios: { get: async () => ({ status: 200 }) } });
+    const result = [await h.handlers['get-proxy-status']({}), await h.handlers['test-proxy']({}, settings)];
+    assert.ok(!JSON.stringify(result).includes('secret-fixture')); assert.ok(!JSON.stringify(result).includes('test-user'));
+  });
+  await check('failed queue persistence returns failure and leaves no ghost submission', async () => {
+    const h = load({}, { './src/store': { getSettings: () => ({ root }), saveTasks() { throw new Error('simulated disk full'); } } });
+    const result = await h.handlers['hongguo-download-batch']({}, { seriesId: 'S', seriesTitle: 'Short', episodes: series()[0].episodes });
+    assert.equal(result.success, false); assert.equal(h.run('downloadTasks.length'), 0); assert.equal(h.run('downloadQueue.length'), 0);
+  });
+  assert.equal(failures, 0, `${failures} download safety regressions`);
+})().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(() => fs.rmSync(root, { recursive: true, force: true }));

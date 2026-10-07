@@ -1,14 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import './HongguoDownload.css';
 import { Search, Film, RefreshCw, ExternalLink } from './icons';
+import { isSubmitKey } from './episodeRange';
 
 /**
  * SearchPanel —— 按所选来源搜索短剧
  * 拿到 series_id 后交给父组件走既有的「拉全集 + 选集下载」流程。
  */
-function SearchPanel({ onSelectSeries, onSwitchToInput }) {
+function SearchPanel({ onSelectSeries, onSwitchToInput, active = true }) {
   const [source, setSource] = useState('hongguo');
   const requestVersion = useRef(0);
+  const pendingSearch = useRef(null);
   useEffect(() => () => { requestVersion.current++; }, []);
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -17,9 +19,19 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
   const [pageTitle, setPageTitle] = useState('');
   const [pickingId, setPickingId] = useState('');
 
+  useEffect(() => {
+    if (!active) {
+      requestVersion.current++;
+      pendingSearch.current = null;
+      setPickingId('');
+      setLoading(false);
+    }
+  }, [active]);
+
   const switchSource = (next) => {
     if (next === source) return;
     requestVersion.current++;
+    pendingSearch.current = null;
     setSource(next);
     setLoading(false);
     setPickingId('');
@@ -34,7 +46,10 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
       setError('请输入剧名关键词');
       return;
     }
+    const key = JSON.stringify([source, kw]);
+    if (pendingSearch.current?.key === key) return;
     const request = ++requestVersion.current;
+    pendingSearch.current = { key, request };
     setPickingId('');
     setLoading(true);
     setError('');
@@ -55,6 +70,7 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
       setError('搜索异常: ' + e.message);
       setResults([]);
     } finally {
+      if (pendingSearch.current?.request === request) pendingSearch.current = null;
       if (request === requestVersion.current) setLoading(false);
     }
   };
@@ -80,8 +96,10 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
   };
 
   const showBrowser = async () => {
-    await window.electronAPI.searchWindowShow(true);
-    setError('已打开搜索窗口，可手动操作；关闭该窗口后回到本页继续。');
+    try {
+      const res = await window.electronAPI.searchWindowShow(true);
+      if (res?.success === false) throw new Error(res.error || '来源页面打开失败');
+    } catch (e) { setError(e.message || '来源页面打开失败，请重试'); }
   };
 
   return (
@@ -99,8 +117,8 @@ function SearchPanel({ onSelectSeries, onSwitchToInput }) {
           aria-label="搜索短剧名称"
           placeholder="输入剧名，例如：一村人养一个神"
           value={keyword}
-          onChange={(e) => { requestVersion.current++; setKeyword(e.target.value); setLoading(false); setPickingId(''); setResults(null); setError(''); }}
-          onKeyDown={(e) => e.key === 'Enter' && doSearch()}
+          onChange={(e) => { requestVersion.current++; pendingSearch.current = null; setKeyword(e.target.value); setLoading(false); setPickingId(''); setResults(null); setError(''); }}
+          onKeyDown={(e) => isSubmitKey(e) && doSearch()}
         />
         <button className="btn btn-primary" onClick={doSearch} disabled={loading}>
           {loading ? (

@@ -25,7 +25,8 @@ function mount(file, api, props = {}) {
   const fallback = () => Promise.resolve({});
   const window = { electronAPI: new Proxy(api, { get: (obj, key) => obj[key] || (key.startsWith('on') ? () => () => {} : fallback) }), addEventListener() {}, removeEventListener() {} };
   const source = transformSync(fs.readFileSync(`${__dirname}/${file}.jsx`, 'utf8'), { loader: 'jsx', format: 'cjs' }).code;
-  const context = { module: { exports: {} }, exports: {}, require: name => name === 'react' ? react : name === './useDialogKeyboard' ? () => {} : {}, window, document: { querySelector: () => null }, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout: id => timers.delete(id), setInterval: () => 1, clearInterval() {}, console };
+  const loadHelper = () => { const module = { exports: {} }; vm.runInNewContext(transformSync(fs.readFileSync(`${__dirname}/episodeRange.js`, 'utf8'), { loader: 'js', format: 'cjs' }).code, { module, exports: module.exports }); return module.exports; };
+  const context = { module: { exports: {} }, exports: {}, require: name => name === 'react' ? react : name === './useDialogKeyboard' ? () => {} : name === './episodeRange' ? loadHelper() : {}, window, document: { querySelector: () => null }, navigator: {}, crypto: require('node:crypto').webcrypto, setTimeout: (fn, delay) => { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout: id => timers.delete(id), setInterval: () => 1, clearInterval() {}, console };
   context.exports = context.module.exports;
   vm.runInNewContext(source, context);
   Component = context.module.exports.default;
@@ -37,7 +38,7 @@ function mount(file, api, props = {}) {
   const flush = async () => { for (let i = 0; i < 30; i++) { await Promise.resolve(); render(); } };
   render();
   const advanceTimers = (ms) => { for (const [id, timer] of [...timers]) if (timer.delay <= ms) { timers.delete(id); timer.fn(); } };
-  return { render, flush, find, button, advanceTimers, text: () => text(tree), unmount: () => cleanups.forEach(fn => fn?.()) };
+  return { render, flush, find, nodes, button, advanceTimers, setProps: next => { props = { ...props, ...next }; render(); }, text: () => text(tree), unmount: () => cleanups.forEach(fn => fn?.()) };
 }
 
 (async () => {
@@ -212,6 +213,91 @@ function mount(file, api, props = {}) {
     let update;
     const ui = mount('DownloadManager', { getDownloadTasks: async () => [], getSeriesList: async () => [], getMergeTasks: async () => [{ id: 'm', seriesTitle: '合并', total: 72, done: 0, progress: 0, status: 'running' }], onMergeProgress: fn => { update = fn; return () => {}; } });
     await ui.flush(); update({ id: 'm', progress: 35, done: 24 }); ui.render(); assert.ok(ui.text().includes('24/72 集')); ui.unmount();
+  });
+  await test('app navigation keeps visited pages and marks background pages inactive', async () => {
+    const ui = mount('../App', { getAppInfo: async () => ({ platform: 'darwin' }) });
+    await ui.flush(); ui.button('设置').props.onClick(); ui.render();
+    assert.ok(ui.find(n => n.props['data-page'] === 'browse')?.props.hidden, 'browse must remain mounted but hidden');
+    assert.equal(ui.find(n => n.props['data-page'] === 'settings')?.props.hidden, false);
+    ui.button('我的剧库').props.onClick(); ui.render(); ui.button('发现短剧').props.onClick(); ui.render();
+    const player = ui.find(n => n.props['data-page'] === 'player');
+    assert.ok(player?.props.hidden, 'visited player must be retained');
+    assert.equal(player.children[0]?.props.active, false, 'hidden player must receive inactive state');
+    assert.equal(ui.nodes().filter(n => n.props['data-page'] === 'browse').length, 1);
+    ui.unmount();
+  });
+  await test('app ordinary navigation preserves the last playback target', async () => {
+    let navigate;
+    const ui = mount('../App', { getAppInfo: async () => ({ platform: 'darwin' }), onNavigate: fn => { navigate = fn; return () => {}; } });
+    await ui.flush(); navigate({ page: 'player', payload: { seriesId: 'A', vidIndex: 2 } }); ui.render();
+    const player = () => ui.find(n => n.props['data-page'] === 'player').children[0];
+    const target = player().props.target;
+    assert.equal(target.seriesId, 'A'); assert.equal(target.vidIndex, 2);
+    ui.button('下载管理').props.onClick(); ui.render();
+    assert.equal(player().props.target, target, 'background navigation must not reset playback initialization');
+    ui.button('我的剧库').props.onClick(); ui.render();
+    assert.equal(player().props.target, target, 'returning must keep the same playback target');
+    ui.unmount();
+  });
+  await test('download keeps its search panel mounted while selecting episodes', async () => {
+    const ui = mount('HongguoDownload', {});
+    ui.find(n => n.props.onSelectSeries).props.onSelectSeries(detail('A')); ui.render();
+    assert.ok(ui.find(n => n.props.onSelectSeries), 'search results must survive selecting a series');
+    ui.button('搜索剧集').props.onClick(); ui.render();
+    assert.ok(ui.button('下载选中集数 (2/2)'), 'episode selection must survive returning to search');
+    ui.unmount();
+  });
+  await test('search keyboard ignores IME confirmation and duplicate Enter', async () => {
+    const pending = deferred(); let calls = 0;
+    const ui = mount('SearchPanel', { searchSeries: () => { calls++; return pending.promise; } });
+    const input = () => ui.find(n => n.props['aria-label'] === '搜索短剧名称');
+    input().props.onChange({ target: { value: '短剧' } }); ui.render();
+    input().props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing: true }, preventDefault() {} });
+    assert.equal(calls, 0, 'confirming an IME candidate must not search');
+    input().props.onKeyDown({ key: 'Enter', preventDefault() {} });
+    input().props.onKeyDown({ key: 'Enter', preventDefault() {} }); ui.render();
+    input().props.onKeyDown({ key: 'Enter', preventDefault() {} });
+    assert.equal(calls, 1, 'same pending search must not queue more work');
+    pending.resolve({ success: true, results: [] }); await ui.flush(); ui.unmount();
+  });
+  await test('resolve keyboard ignores IME confirmation and duplicate Enter', async () => {
+    const pending = deferred(); let calls = 0;
+    const ui = mount('HongguoDownload', { hongguoResolve: () => { calls++; return pending.promise; } });
+    ui.button('粘贴链接').props.onClick(); ui.render();
+    const input = () => ui.find(n => n.props['aria-label'] === '短剧分享链接或剧集 ID');
+    input().props.onChange({ target: { value: 'A' } }); ui.render();
+    input().props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing: true }, preventDefault() {} });
+    assert.equal(calls, 0);
+    input().props.onKeyDown({ key: 'Enter', preventDefault() {} }); input().props.onKeyDown({ key: 'Enter', preventDefault() {} });
+    assert.equal(calls, 1); pending.resolve(ok(detail('A'))); await ui.flush(); ui.unmount();
+  });
+  for (const file of ['HongguoDownload', 'Browse']) await test(`${file} range accepts Chinese separators and rejects partial numbers without changing selection`, async () => {
+    const data = detail('range'); data.total = 3; data.episodes.push(episode(3));
+    const ui = mount(file, { getSeriesList: async () => [], browseCategories: async () => [], browseList: async () => ({ success: true, results: [{ series_id: 'range', series_title: 'range' }] }), searchResolve: async () => ok(data), getSeriesEpisodes: async () => ok(data) });
+    if (file === 'Browse') { await ui.flush(); ui.find(n => n.props.className === 'browse-card').props.onClick(); await ui.flush(); }
+    else { ui.find(n => n.props.onSelectSeries).props.onSelectSeries(data); ui.render(); }
+    const input = () => ui.find(n => n.props['aria-label'] === '选择集数范围');
+    input().props.onChange({ target: { value: '1，3' } }); ui.render(); ui.button('应用').props.onClick(); ui.render();
+    const selected = () => ui.nodes().filter(n => n.props['aria-pressed'] === true).length;
+    assert.equal(selected(), 2, 'Chinese commas must select both episodes');
+    input().props.onChange({ target: { value: '2oops' } }); ui.render(); ui.button('应用').props.onClick(); ui.render();
+    assert.equal(selected(), 2, 'invalid input must preserve selection');
+    assert.ok(ui.find(n => n.props.role === 'alert'), 'invalid range needs visible feedback'); ui.unmount();
+  });
+  await test('proxy test ignores results after the draft changes or closes', async () => {
+    const pending = deferred();
+    const ui = mount('Settings', { getSettings: async () => ({ proxy_enabled: true, proxy_mode: 'custom', proxy_host: '127.0.0.1', proxy_port: 7890 }), testProxy: () => pending.promise });
+    await ui.flush(); ui.button('配置代理').props.onClick(); ui.render(); ui.button('测试连接').props.onClick(); ui.render();
+    ui.find(n => n.props['aria-label'] === '代理端口').props.onChange({ target: { value: '7891' } }); ui.render();
+    pending.resolve({ success: true, message: 'OLD_CONFIG_OK' }); await ui.flush();
+    assert.ok(!ui.text().includes('OLD_CONFIG_OK'), 'old test result must not describe the edited draft'); ui.unmount();
+  });
+  await test('settings failed save reports the reason and retains the draft', async () => {
+    const ui = mount('Settings', { getSettings: async () => ({ root: '/old' }), saveSettings: async () => ({ success: false, error: '磁盘空间不足' }) });
+    await ui.flush(); ui.find(n => n.props['aria-label'] === '下载目录').props.onChange({ target: { value: '/new' } }); ui.render();
+    await ui.button('保存设置').props.onClick(); ui.render();
+    assert.ok(ui.text().includes('磁盘空间不足')); assert.equal(ui.find(n => n.props['aria-label'] === '下载目录').props.value, '/new');
+    assert.ok(!ui.text().includes('已保存')); ui.unmount();
   });
   process.exitCode = failures ? 1 : 0;
 })();
