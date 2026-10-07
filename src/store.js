@@ -110,4 +110,3 @@ module.exports = {
   getMergeTasks,
   saveMergeTasks,
 };
-
