@@ -43,7 +43,7 @@ function mount(file, api, props = {}) {
 
 (async () => {
   let failures = 0;
-  const test = async (name, fn) => { if (process.argv[2] && !name.includes(process.argv[2])) return; try { await fn(); console.log(`PASS ${name}`); } catch (e) { failures++; console.error(`FAIL ${name}: ${e.stack}`); } };
+  const test = async (name, fn) => { if (process.argv[2] && !new RegExp(process.argv[2]).test(name)) return; try { await fn(); console.log(`PASS ${name}`); } catch (e) { failures++; console.error(`FAIL ${name}: ${e.stack}`); } };
   await test('closing a loading detail ignores its late result', async () => {
     const pending = deferred();
     const ui = mount('Browse', { getSeriesList: async () => [], browseCategories: async () => [], browseList: async () => ({ success: true, results: [{ series_id: 'A', series_title: 'A' }] }), searchResolve: () => pending.promise, getSeriesEpisodes: async () => ok(detail('A')) });
@@ -168,6 +168,34 @@ function mount(file, api, props = {}) {
     ui.button('下一页').props.onClick(); await ui.flush(); assert.equal(pages.at(-1), 2); assert.equal(ui.button('下一页').props.disabled, true); assert.ok(ui.text().includes('第 2 页'));
     ui.button('上一页').props.onClick(); await ui.flush(); assert.ok(ui.text().includes('第 1 页')); ui.unmount();
   });
+  await test('all-source search merges both sources and resolves the original source ID', async () => {
+    const first = deferred(), second = deferred(), calls = [], resolved = [], picked = [];
+    const ui = mount('SearchPanel', { searchSeries: (kw, options) => { calls.push([kw, options.source]); return options.source === 'hongguo' ? first.promise : options.source === 'xifan' ? second.promise : Promise.resolve({ success: true, results: [] }); }, searchResolve: async id => { resolved.push(id); return ok(detail(id)); } }, { onSelectSeries: d => picked.push(d) });
+    assert.equal(ui.find(n => n.props['aria-label'] === '短剧来源').props.value, 'all');
+    assert.ok(ui.find(n => n.type === 'option' && n.props.value === 'all'));
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '同名剧' } }); ui.render(); ui.button('搜索').props.onClick();
+    assert.deepEqual(calls, [['同名剧', 'hongguo'], ['同名剧', 'xifan'], ['同名剧', 'hema']], 'all searches start without waiting for each other');
+    second.resolve({ success: true, results: [{ series_id: 'xifan:test:123', series_title: '同名剧' }] });
+    first.resolve({ success: true, results: [{ series_id: '123', series_title: '同名剧' }] }); await ui.flush();
+    const cards = ui.nodes().filter(n => n.props.className?.startsWith('search-card '));
+    assert.equal(cards.length, 2, 'same title across sources must remain separately selectable');
+    assert.ok(ui.nodes().some(n => n.props.className === 'badge' && n.children.includes('红果短剧')));
+    assert.ok(ui.nodes().some(n => n.props.className === 'badge' && n.children.includes('西饭短剧')));
+    cards[1].props.onClick(); await ui.flush(); assert.equal(resolved[0], 'xifan:test:123'); assert.equal(picked[0].series_id, 'xifan:test:123'); ui.unmount();
+  });
+  await test('all-source search keeps successful results when the other source fails', async () => {
+    for (const failure of [{ success: false, error: '来源暂不可用' }, new Error('连接超时')]) {
+      const ui = mount('SearchPanel', { searchSeries: async (kw, { source }) => { if (source === 'hongguo') return { success: true, results: [{ series_id: '123', series_title: '仍可查看' }] }; if (failure instanceof Error) throw failure; return failure; } });
+      ui.find(n => n.type === 'input').props.onChange({ target: { value: '剧名' } }); ui.render(); ui.button('搜索').props.onClick(); await ui.flush();
+      assert.ok(ui.text().includes('仍可查看')); assert.ok(ui.find(n => n.props.role === 'alert'), 'failed source must not be silently omitted');
+      assert.ok(ui.text().includes(failure.message || failure.error)); assert.ok(!ui.text().includes('没有找到相关短剧')); ui.unmount();
+    }
+  });
+  await test('all-source search failures are not shown as an empty successful search', async () => {
+    const ui = mount('SearchPanel', { searchSeries: async () => ({ success: false, error: '网络断开' }) });
+    ui.find(n => n.type === 'input').props.onChange({ target: { value: '剧名' } }); ui.render(); ui.button('搜索').props.onClick(); await ui.flush();
+    assert.ok(ui.find(n => n.props.role === 'alert')); assert.ok(!ui.text().includes('没有找到相关短剧')); ui.unmount();
+  });
   await test('xifan search source change ignores late searches and detail picks', async () => {
     const old = deferred(), pick = deferred(), picked = []; const calls = [];
     const ui = mount('SearchPanel', { searchSeries: (kw, options) => { calls.push(options); return options?.source === 'xifan' ? Promise.resolve({ success: true, results: [{ series_id: 'X', series_title: '西饭搜索' }] }) : old.promise; }, searchResolve: () => pick.promise }, { onSelectSeries: d => picked.push(d) });
@@ -257,7 +285,7 @@ function mount(file, api, props = {}) {
     input().props.onKeyDown({ key: 'Enter', preventDefault() {} });
     input().props.onKeyDown({ key: 'Enter', preventDefault() {} }); ui.render();
     input().props.onKeyDown({ key: 'Enter', preventDefault() {} });
-    assert.equal(calls, 1, 'same pending search must not queue more work');
+    assert.equal(calls, 3, 'same pending all-source search must call each source only once');
     pending.resolve({ success: true, results: [] }); await ui.flush(); ui.unmount();
   });
   await test('resolve keyboard ignores IME confirmation and duplicate Enter', async () => {

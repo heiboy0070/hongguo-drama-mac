@@ -486,7 +486,7 @@ function Browse({ onNavigate, active = true }) {
                     {detail.cover && <img src={detail.cover} alt="" className="browse-drawer-cover" />}
                     <div className="browse-drawer-meta">
                       <div className="browse-drawer-count">
-                        {String(detail.series_id).startsWith('xifan:') ? '西饭短剧' : '红果短剧'} · 共 {detail.total} 集 · 已下载 <b>{detail.completedCount}</b> 集
+                        {String(detail.series_id).startsWith('hema:') ? '河马短剧' : String(detail.series_id).startsWith('xifan:') ? '西饭短剧' : '红果短剧'} · 共 {detail.total} 集 · 已下载 <b>{detail.completedCount}</b> 集
                       </div>
                       {detail.web_accessible_episodes != null && detail.web_accessible_episodes < detail.total && (
                         <div className="browse-drawer-sub">网页源提供前 {detail.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</div>

@@ -270,7 +270,7 @@ function HongguoDownload({ onNavigate, active = true }) {
               <div className="series-meta">
                 <h3 className="series-title">《{seriesData.series_title}》</h3>
                 <div className="series-tags">
-                  <span className="badge">{String(seriesData.series_id).startsWith('xifan:') ? '西饭短剧' : '红果短剧'}</span>
+                  <span className="badge">{String(seriesData.series_id).startsWith('hema:') ? '河马短剧' : String(seriesData.series_id).startsWith('xifan:') ? '西饭短剧' : '红果短剧'}</span>
                   <span className="badge">共 {seriesData.total} 集</span>
                   <span className="badge badge-secondary">已选 {selectedVids.size} 集</span>
                 </div>

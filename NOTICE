@@ -89,3 +89,9 @@ build/ffmpeg/MACOS-NOTICE.txt、MACOS-VERSIONS.txt、MACOS-LICENSE.txt。
 新增西饭独立来源，保留服务端锁定状态，不请求解锁或广告奖励接口。
 来源接口参考 Hululu007/drpy-node 的接口路径与公开返回结构，适配器独立编写。
 Mac FFmpeg 改为固定 FFmpeg 9.0.2 与 x264 b35605a 自行源码构建。
+
+2026-10-07 (1.1.5): Added all-source search across Hongguo, Xifan and Hema.
+The independently implemented Hema adapter reads publicly available search and
+episode metadata from www.kuaikaw.cn, preserves charged/unknown episodes as locked,
+and does not request unlock or encrypted-media endpoints. No third-party adapter
+code was copied. Content rights remain with their respective owners.

@@ -540,8 +540,8 @@ async function executeHongguoDownload(task) {
     fs.mkdirSync(downloadDir, { recursive: true });
     const finalPath = task.savePath || path.join(downloadDir, filename);
     task.savePath = finalPath;
-    // Recheck source access before reusing an existing Xifan file or URL.
-    const checkedPlayInfo = String(vid).startsWith('xifan:')
+    // Recheck source access before reusing an existing third-party file or URL.
+    const checkedPlayInfo = /^(xifan|hema):/.test(String(vid))
       ? await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id) : null;
     if (checkedPlayInfo && !checkedPlayInfo.url) throw new Error(checkedPlayInfo.error || '来源未开放该集');
     // Existing complete files need no additional media transfer.
@@ -861,6 +861,7 @@ ipcMain.handle('search-series', async (event, keyword, options = {}) => {
   const kw = String(keyword || '').trim();
   if (!kw) return { success: false, error: '请输入搜索关键词' };
   try {
+    if (options?.source === 'hema') return await require('./src/native/hema').search(kw);
     if (options?.source === 'xifan') return await require('./src/native/xifan').search(kw);
     return await runSearchSniff(kw);
   } catch (error) {
@@ -1143,7 +1144,7 @@ ipcMain.handle('get-merge-tasks', async () => mergeTasks.map(({ child, ...rest }
 function seriesDownloadDir(root, seriesId, seriesTitle) {
   const title = sanitizeFolderName(seriesTitle) || '未命名短剧';
   const suffix = createHash('sha256').update(String(seriesId)).digest('hex').slice(0, 12);
-  return path.join(root, String(seriesId).startsWith('xifan:') ? '西饭短剧' : '红果短剧', `${title}-${suffix}`);
+  return path.join(root, String(seriesId).startsWith('hema:') ? '河马短剧' : String(seriesId).startsWith('xifan:') ? '西饭短剧' : '红果短剧', `${title}-${suffix}`);
 }
 
 /** 找到某剧在磁盘上的目录（优先用任务记录，其次按标题推导） */
@@ -1157,7 +1158,7 @@ function resolveSeriesDir(seriesId, seriesTitle, covers) {
   const guess = seriesDownloadDir(root, seriesId, seriesTitle);
   if (fs.existsSync(guess)) return guess;
   // Older versions used title-only directories. Reuse only when ownership is unambiguous.
-  if (!String(seriesId).startsWith('xifan:')) {
+  if (!/^(xifan|hema):/.test(String(seriesId))) {
     const title = sanitizeFolderName(seriesTitle) || '未命名短剧';
     const owners = seriesRegistry.filter(s => sanitizeFolderName(s.series_title) === title);
     const legacy = path.join(root, '红果短剧', title);
@@ -1718,7 +1719,7 @@ ipcMain.handle('prepare-online-play', async (event, payload) => {
   const session = { vid: key, requestId, requests: new Set(), entry: null };
   onlineSessions.set(streamId, session);
   try {
-    const checkedPlayInfo = key.startsWith('xifan:') ? await hongguo.fetchPlayUrlSingle(key, seriesId) : null;
+    const checkedPlayInfo = /^(xifan|hema):/.test(key) ? await hongguo.fetchPlayUrlSingle(key, seriesId) : null;
     if (checkedPlayInfo && !checkedPlayInfo.url) throw new Error(checkedPlayInfo.error || '来源未开放该集');
     let entry = onlineCache.get(key), cached = !!entry;
     if (!entry) {
@@ -1959,7 +1960,7 @@ async function transcodeForPlayback(payload, job = { controller: new AbortContro
     checkCancelled();
     const { seriesId, vidIndex, filePath, force } = payload || {};
     if (!seriesId || vidIndex == null) return { success: false, error: '缺少剧集信息' };
-    if (String(seriesId).startsWith('xifan:') || String(payload.vid).startsWith('xifan:')) {
+    if (/^(xifan|hema):/.test(String(seriesId)) || /^(xifan|hema):/.test(String(payload.vid))) {
       const current = await hongguo.fetchEpisodeList(seriesId);
       checkCancelled();
       const episode = current.episodes.find(ep => Number(ep.vid_index) === Number(vidIndex));
@@ -2128,7 +2129,7 @@ ipcMain.handle('decode-capability', async () => ({
  */
 async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
   if (!Array.isArray(episodes) || episodes.length === 0) return 0;
-  if (String(seriesId).startsWith('xifan:')) {
+  if (/^(xifan|hema):/.test(String(seriesId))) {
     const current = await hongguo.fetchEpisodeList(seriesId);
     episodes = episodes.map(requested => {
       const ep = current.episodes.find(item => item.vid === requested.vid && Number(item.vid_index) === Number(requested.vid_index));
@@ -2136,7 +2137,7 @@ async function enqueueEpisodes({ seriesId, seriesTitle, episodes, cover }) {
       if (ep.locked) throw new Error('该集已锁定，请在来源平台解锁');
       return ep;
     });
-  } else if (episodes.some(ep => String(ep.vid).startsWith('xifan:'))) {
+  } else if (episodes.some(ep => /^(xifan|hema):/.test(String(ep.vid)))) {
     throw new Error('剧集来源不匹配');
   }
 
