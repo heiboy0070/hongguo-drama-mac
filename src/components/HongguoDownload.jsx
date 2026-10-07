@@ -37,7 +37,7 @@ function HongguoDownload({ onNavigate }) {
     setErrorMsg('');
     setTab('input');
     setSeriesData(data);
-    setSelectedVids(new Set(data.episodes.filter((ep) => ep.web_available !== false).map((ep) => ep.vid)));
+    setSelectedVids(new Set(data.episodes.map((ep) => ep.vid)));
     setSuccessMsg(`已选中《${data.series_title}》共 ${data.total} 集，可直接提交下载`);
     document.querySelector('.main-content')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -61,8 +61,8 @@ function HongguoDownload({ onNavigate }) {
       if (request !== resolveRequest.current) return;
       if (res?.success && res.data) {
         setSeriesData(res.data);
-        // 默认选择网页已知可用或尚未知的集数，保留用户手动尝试备用源。
-        const allVids = new Set(res.data.episodes.filter((ep) => ep.web_available !== false).map((ep) => ep.vid));
+        // 默认全选，网页未提供的集数自动尝试 App 片源。
+        const allVids = new Set(res.data.episodes.map((ep) => ep.vid));
         setSelectedVids(allVids);
         setSuccessMsg(`解析成功！找到《${res.data.series_title}》共 ${res.data.total} 集`);
       } else {
@@ -299,7 +299,7 @@ function HongguoDownload({ onNavigate }) {
           </div>
 
           {seriesData.web_accessible_episodes != null && seriesData.web_accessible_episodes < seriesData.total && (
-            <p className="settings-hint">官网网页当前提供前 {seriesData.web_accessible_episodes} 集，默认不选其余集数；仍可手动选择并尝试备用片源。</p>
+            <p className="settings-hint">网页源提供前 {seriesData.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</p>
           )}
 
           {/* 筛选与操作栏 */}

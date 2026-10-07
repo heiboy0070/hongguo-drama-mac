@@ -73,3 +73,8 @@ Apple Silicon 包内置 Martin Riedl 9.0.2 arm64 构建，文件位于 `Contents
 
 本软件基于上游项目二次开发，整体以 **GNU General Public License v3.0** 发布，
 详见仓库根目录的 `LICENSE` 与 `NOTICE`。
+
+## App 片源签名及 Spade 算法
+
+改编自 woshishiq1/drpys，经 N3urda/hongguoTV 的 vendor 源码核对，GPL-3.0。
+完整来源与修改说明见 `src/native/licenses/NOTICE.txt`，许可见同目录 `LICENSE.drpys.txt`。

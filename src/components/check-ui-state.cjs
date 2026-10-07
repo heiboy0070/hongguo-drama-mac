@@ -94,12 +94,12 @@ function mount(file, api, props = {}) {
     ui.button('获取剧集').props.onClick(); await ui.flush(); oldSearchResult(detail('A')); ui.render();
     assert.ok(ui.text().includes('《B》')); assert.ok(!ui.text().includes('《A》')); ui.unmount();
   });
-  await test('download defaults to available episodes and bounds enormous ranges', async () => {
+  await test('download includes App fallback episodes by default and bounds enormous ranges', async () => {
     const data = detail('A'); data.web_accessible_episodes = 1; data.episodes[0].web_available = true; data.episodes[1].web_available = false;
     const ui = mount('HongguoDownload', {});
     ui.find(n => n.props.onSelectSeries).props.onSelectSeries(data); ui.render();
-    assert.ok(ui.button('下载选中集数 (1/2)'), 'known unavailable episodes must not be selected by default');
-    assert.ok(ui.text().includes('官网网页当前提供前 1 集'));
+    assert.ok(ui.button('下载选中集数 (2/2)'), 'web-unavailable episodes remain selected for the App fallback');
+    assert.ok(ui.text().includes('网页源提供前 1 集，后续集数自动尝试 App 片源'));
     ui.find(n => n.props['aria-label'] === '选择集数范围').props.onChange({ target: { value: '1-999999999' } }); ui.render();
     vm.runInNewContext('apply()', { apply: ui.button('应用').props.onClick }, { timeout: 100 }); ui.render();
     assert.ok(ui.button('下载选中集数 (2/2)'), 'manual selection must keep the API fallback available'); ui.unmount();

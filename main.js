@@ -539,7 +539,15 @@ async function executeHongguoDownload(task) {
     await pipeline(response.data, writer);
     source.token.throwIfRequested();
     if (totalLength && received !== totalLength) throw new Error('视频下载不完整，请重试');
-    if (playInfo.spadeA) {
+    if (playInfo.contentKey) {
+      const decodedPath = tmpPath + '.decoded';
+      try {
+        await decryptContentKeyFile(tmpPath, decodedPath, playInfo.contentKey, { cancelToken: source.token });
+        source.token.throwIfRequested();
+        fs.renameSync(decodedPath, finalPath);
+      } finally { try { fs.unlinkSync(decodedPath); } catch (_) {} }
+      fs.unlinkSync(tmpPath);
+    } else if (playInfo.spadeA) {
       const key = hongguo.deriveKey(playInfo.spadeA);
       if (!key) throw new Error('Key 派生失败');
       // Decrypt to another temporary file; never expose partial data as a completed MP4.
@@ -1723,15 +1731,84 @@ function registerLocalProtocol() {
   });
 }
 
+/** App CENC uses native FFmpeg for both senc and saiz/saio layouts. Never log key/args. */
+async function decryptContentKeyFile(input, output, contentKey, { signal, cancelToken } = {}) {
+  if (typeof contentKey !== 'string' || !/^[a-f\d]{32}$/i.test(contentKey)) throw new Error('片源解密密钥格式无效');
+  if (signal?.aborted) throw new Error('已取消媒体解密');
+  cancelToken?.throwIfRequested();
+  const executable = resolveFfmpeg('ffmpeg');
+  if (!executable) throw new Error('未找到内置 FFmpeg，无法准备该片源');
+  try {
+    await new Promise((resolve, reject) => {
+      const { spawn } = require('child_process');
+      const child = spawn(executable, ['-y', '-hide_banner', '-loglevel', 'error',
+        '-decryption_key', contentKey, '-i', input, '-map', '0:v:0', '-map', '0:a?',
+        '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', output],
+      { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+      let cancelled = false, killTimer;
+      const abort = () => {
+        if (cancelled) return;
+        cancelled = true; child.kill('SIGTERM');
+        killTimer = setTimeout(() => child.kill('SIGKILL'), 2000);
+      };
+      const cleanup = () => {
+        clearTimeout(killTimer);
+        signal?.removeEventListener('abort', abort);
+        cancelToken?.unsubscribe(abort);
+      };
+      // Discard native diagnostics: they may contain private input paths or key material.
+      child.stderr.on('data', () => {});
+      signal?.addEventListener('abort', abort, { once: true });
+      cancelToken?.subscribe(abort);
+      if (signal?.aborted || cancelToken?.reason) abort();
+      child.once('error', () => { cleanup(); reject(new Error('无法启动内置 FFmpeg')); });
+      child.once('close', code => {
+        cleanup();
+        if (cancelled) reject(new Error('已取消媒体解密'));
+        else if (code !== 0) reject(new Error(`媒体解密失败（FFmpeg 退出码 ${code}），请重新获取片源后重试`));
+        else resolve();
+      });
+    });
+    if (signal?.aborted) throw new Error('已取消媒体解密');
+    cancelToken?.throwIfRequested();
+    if ((await fsp.stat(output)).size === 0) throw new Error('媒体解密没有生成可用文件');
+  } catch (error) {
+    try { await fsp.unlink(output); } catch (_) {}
+    throw error;
+  }
+}
+
 /** Encrypted sources and compatibility transcoding still require the complete MP4. */
 async function fetchDecryptedEpisode(vid, onProgress, seriesId, playInfo, signal) {
   playInfo = playInfo || await hongguo.fetchPlayUrlSingle(vid, seriesId);
   if (!playInfo?.url) throw new Error(playInfo?.error || '未获取到有效播放地址');
   if (signal?.aborted) throw new Error('已取消播放');
+  if (playInfo.contentKey && !/^[a-f\d]{32}$/i.test(playInfo.contentKey)) throw new Error('片源解密密钥格式无效');
   const response = await requestMedia(playInfo, { signal });
   const total = Number(response.headers['content-length']) || 0;
   const chunks = [];
   let received = 0, lastProgress = 0;
+  if (playInfo.contentKey) {
+    let temporary;
+    try {
+      temporary = await fsp.mkdtemp(path.join(app.getPath('temp'), 'hongguo-decrypt-'));
+      const input = path.join(temporary, 'encrypted.mp4'), output = path.join(temporary, 'decoded.mp4');
+      response.data.on('data', chunk => {
+        received += chunk.length;
+        if (onProgress && (Date.now() - lastProgress >= 150 || received === total)) {
+          onProgress(received, total); lastProgress = Date.now();
+        }
+      });
+      await pipeline(response.data, fs.createWriteStream(input, { mode: 0o600 }), { signal });
+      if (total && received !== total) throw new Error('视频下载不完整，请重试');
+      if (onProgress) onProgress(received, received, 'decrypting');
+      await decryptContentKeyFile(input, output, playInfo.contentKey, { signal });
+      return await fsp.readFile(output);
+    } finally {
+      response.data.destroy();
+      if (temporary) await fsp.rm(temporary, { recursive: true, force: true });
+    }
+  }
   for await (const chunk of response.data) {
     chunks.push(chunk); received += chunk.length;
     if (onProgress && (Date.now() - lastProgress >= 150 || received === total)) {
@@ -1767,7 +1844,7 @@ ipcMain.handle('prepare-online-play', async (event, payload) => {
           if (controller.signal.aborted) throw new Error('已取消播放');
           if (!playInfo?.url) throw new Error(playInfo?.error || '未获取到有效播放地址');
           const prepared = { size: 0, lastUsed: Date.now(), seriesId: String(seriesId || ''), vidIndex: Number(vidIndex) || 0 };
-          if (!playInfo.spadeA) return { ...prepared, playInfo };
+          if (!playInfo.spadeA && !playInfo.contentKey) return { ...prepared, playInfo };
           prepared.buffer = await fetchDecryptedEpisode(key, (received, total, phase) => {
             for (const active of onlineSessions.values()) if (active.vid === key) {
               sendToRenderer('online-play-progress', { vid: key, seriesId, vidIndex, requestId: active.requestId,

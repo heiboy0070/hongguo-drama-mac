@@ -73,3 +73,11 @@ Mac 内置 FFmpeg 为 GPLv3-or-later 的独立 arm64 构建，详见
 build/ffmpeg/MACOS-NOTICE.txt、MACOS-VERSIONS.txt、MACOS-LICENSE.txt。
 应用仅作本地 ad-hoc 签名，未使用 Developer ID，未申请 Apple 公证。
 源码发布不意味着编译包发布；发布二进制仍须提供完整对应源码。
+
+七、App 片源补充（1.1.2，2026-10-07）
+-----------------------------------
+新增本地签名及 fallback_api 二次取址，适配网页未提供媒体的分集。
+必要算法改编自 N3urda/hongguoTV 所收录的 woshishiq1/drpys GPL-3.0 源码；
+具体提交、修改与许可全文见 src/native/licenses/。使用本地临时访客参数，
+不包含上游固定设备 ID、账号 Cookie 或第三方签名服务。
+新片源通过内置 FFmpeg 解密，选择受支持编码，保留原网页及旧接口路径。

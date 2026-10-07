@@ -25,7 +25,7 @@ function Player({ target, onNavigate }) {
   const [pickerQuery, setPickerQuery] = useState('');
   const [dismissedCount, setDismissedCount] = useState(0);
 
-  // 在线播放（内存缓存，不落盘）
+  // 在线播放（按需流式或临时准备后缓存）
   const [onlineVid, setOnlineVid] = useState(null);
   const [onlineUrl, setOnlineUrl] = useState('');
   const [mediaBuffering, setMediaBuffering] = useState(false);
@@ -322,7 +322,7 @@ function Player({ target, onNavigate }) {
 
   /**
    * 在线播放：明文片源按需加载，加密片源准备后返回播放地址。
-   * 不写本地文件、不占用下载目录，看完可选择清理内存缓存。
+   * 不占用下载目录；加密片源的准备文件会自动清理。
    */
   const startOnlinePlay = useCallback(
     async (vidIndex) => {
@@ -1004,7 +1004,7 @@ function Player({ target, onNavigate }) {
                     下载本集
                   </button>
                 </div>
-                <span className="player-placeholder-sub">在线播放会临时缓存在内存中，不占用你的下载目录</span>
+                <span className="player-placeholder-sub">在线播放不保存到下载目录，准备产生的临时文件会自动清理</span>
               </>
             ) : (
               <>
@@ -1071,7 +1071,7 @@ function Player({ target, onNavigate }) {
       )}
 
       {detail?.web_accessible_episodes != null && detail.web_accessible_episodes < detail.total && (
-        <p className="player-tips">官网网页当前提供前 {detail.web_accessible_episodes} 集；其余集数会尝试备用片源，可播情况以来源实际返回为准。</p>
+        <p className="player-tips">网页源提供前 {detail.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</p>
       )}
 
       {/* 分集列表 */}
@@ -1108,7 +1108,7 @@ function Player({ target, onNavigate }) {
       <div className="player-tips">
         快捷键：空格 播放/暂停 · ← → 快退/快进 5 秒 · ↑ ↓ 上一集/下一集 · A 切换连播。
         <br />
-        <b>灰色分集点一下即可在线播放</b>（不下载、不占下载目录，缓存在内存中）；双击才加入下载队列。
+        <b>灰色分集点一下即可在线播放</b>（不保存到下载目录）；双击才加入下载队列。
         连播时遇到未下载的集会自动转在线播放。
       </div>
 

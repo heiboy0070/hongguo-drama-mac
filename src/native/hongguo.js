@@ -418,6 +418,12 @@ async function fetchPlayUrlFresh(vid, sid) {
   const web = await fetchPlayUrlFromWeb(vid, sid);
   if (web && web.url) return web;
 
+  try {
+    return await require('./app-source').fetchAppPlayUrl(String(vid));
+  } catch (_) {
+    // 保留旧接口回退；取址错误不可包含签名地址或媒体密钥。
+  }
+
   const body = {
     biz_param: MODEL_BIZ_PARAM,
     dr_scene: "preload",

@@ -7,9 +7,9 @@ const sourcePath = path.join(__dirname, '../src/native/hongguo.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
 const page = '{"vid_list":["11","12"],"series_name":"测试剧","main_url":"https://media.example/video.mp4"}';
 
-function fixture({ web = true, api = false, blockedVids = [], html = page } = {}) {
+function fixture({ web = true, api = false, app = false, blockedVids = [], html = page } = {}) {
   let now = 0;
-  const state = { web, api, get: 0, post: 0, waits: 0 };
+  const state = { web, api, app, get: 0, post: 0, appCalls: 0, waits: 0 };
   const axios = {
     async get(url) {
       state.get++;
@@ -27,7 +27,7 @@ function fixture({ web = true, api = false, blockedVids = [], html = page } = {}
   };
   const context = {
     module: { exports: {} }, Buffer, process: { env: {} },
-    require: name => name === 'axios' ? axios : require(name),
+    require: name => name === 'axios' ? axios : name === './app-source' ? { fetchAppPlayUrl: async () => { state.appCalls++; if (!state.app) throw Error('app unavailable'); return { url: 'https://media.example/app.mp4', contentKey: '01'.repeat(16), source: 'app' }; } } : require(name),
     Date: class extends Date { static now() { return now; } },
     setTimeout: fn => { state.waits++; fn(); },
     console: { warn() {}, log() {} },
@@ -37,6 +37,15 @@ function fixture({ web = true, api = false, blockedVids = [], html = page } = {}
 }
 
 const checks = [
+  ['App 源补齐网页缺失分集并复用短缓存', async () => {
+    const { native, state } = fixture({ web: false, app: true });
+    const result = await native.fetchPlayUrlSingle('12', '1');
+    assert.equal(result.source, 'app');
+    assert.equal(result.contentKey.length, 32);
+    await native.fetchPlayUrlSingle('12', '1');
+    assert.equal(state.appCalls, 1);
+    assert.equal(state.post, 0, 'App 新接口可用时不调用旧接口');
+  }],
   ['分集网页优先、并发合并、短期复用', async () => {
     const { native, state } = fixture();
     const results = await Promise.all([native.fetchEpisodeList('1'), native.fetchEpisodeList('1')]);
@@ -109,7 +118,7 @@ const checks = [
 
 (async () => {
   let failed = 0;
-  const selected = process.argv.includes('--availability') ? checks.filter(([name]) => name.startsWith('网页可用范围')) : checks;
+  const selected = process.argv.includes('--app') ? checks.filter(([name]) => name.startsWith('App ')) : process.argv.includes('--availability') ? checks.filter(([name]) => name.startsWith('网页可用范围')) : checks;
   for (const [name, run] of selected) {
     try { await run(); console.log(`PASS ${name}`); }
     catch (error) { failed++; console.error(`FAIL ${name}: ${error.message}`); }

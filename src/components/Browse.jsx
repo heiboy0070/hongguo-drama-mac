@@ -426,7 +426,7 @@ function Browse({ onNavigate }) {
                         共 {detail.total} 集 · 已下载 <b>{detail.completedCount}</b> 集
                       </div>
                       {detail.web_accessible_episodes != null && detail.web_accessible_episodes < detail.total && (
-                        <div className="browse-drawer-sub">官网网页当前提供前 {detail.web_accessible_episodes} 集；其余集数会尝试备用片源。</div>
+                        <div className="browse-drawer-sub">网页源提供前 {detail.web_accessible_episodes} 集，后续集数自动尝试 App 片源。</div>
                       )}
                       <div className="browse-drawer-sub">选中 {selectedIdx.size} 集待下载</div>
                       <div className="browse-range-row">
