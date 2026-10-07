@@ -1,0 +1,46 @@
+FFmpeg / FFprobe for Apple Silicon macOS
+=======================================
+
+Version: 9.0.2-https://www.martin-riedl.de
+Build: macos/arm64/1789931890_9.0.2 (2026-09-20)
+Copyright (c) 2000-2026 the FFmpeg developers and respective library authors.
+License: GNU General Public License version 3 or later.
+
+Binary distributor and fixed download directory:
+  https://ffmpeg.martin-riedl.de/
+  https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/
+
+The build includes --enable-gpl --enable-version3 and does NOT include
+--enable-nonfree. Both programs report GPL version 3 or later with -L.
+It contains libx264 and Apple's VideoToolbox support. Non-system codec libraries
+are statically linked. otool -L showed only /usr/lib and /System/Library paths.
+The application invokes these separate executables; their source is unmodified.
+
+Archive SHA256 (verified against distributor's .zip.sha256 files):
+  ffmpeg.zip  c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924
+  ffprobe.zip fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6
+
+Original executable SHA256 (before app packaging re-signs the executables):
+  ffmpeg  2e11c6f90993cdb79fff84d3f90044d28316b310e75b3e030cfc9a54f2c9d384
+  ffprobe 2738aa46a7f9acbc8ab09a6715554c90f7de603171ac403726765685df6a0059
+
+License text: COPYING.GPLv3 and MACOS-LICENSE.txt in this directory.
+Complete configuration and dependency versions: MACOS-VERSIONS.txt.
+The FFmpeg license notice credits the Independent JPEG Group (IJG); the
+application does not modify the IJG-derived FFmpeg source files.
+
+Source and build instructions:
+  FFmpeg 9.0.2: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+  FFmpeg tag: https://github.com/FFmpeg/FFmpeg/tree/n9.0.2
+  Build scripts: https://git.martin-riedl.de/ffmpeg/build-script
+  The release build uses the main branch of those scripts. See its README for
+  source download locations, build tools, and build options; exact dependency
+  versions supplied with these binaries are recorded in MACOS-VERSIONS.txt.
+
+Publishing this application's source does not publish these ignored binaries.
+Before distributing compiled packages to third parties, the distributor must
+also make available the complete corresponding source of the GPL components,
+including the exact linked dependencies and build scripts, as required by GPLv3
+section 6. Source URL pointers alone are not a complete source distribution.
+
+The Windows FFmpeg build retains its own FFMPEG-NOTICE.txt.
