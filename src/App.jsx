@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Film, Download, Settings, Play, Home, Search } from './components/icons';
+import { Film, Download, Settings, Play, Home, Search, Clock } from './components/icons';
 import HongguoDownload from './components/HongguoDownload';
 import DownloadManager from './components/DownloadManager';
 import SettingsPage from './components/Settings';
 import Player from './components/Player';
 import Browse from './components/Browse';
+import History from './components/History';
 import { formatAccel, bossKeyWarning } from './bossKey';
 import { readThemePreference, applyTheme, watchSystemTheme } from './theme';
 
@@ -15,6 +16,7 @@ const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
   { id: 'download', label: '搜索与下载', icon: Search },
   { id: 'manager', label: '下载管理', icon: Download },
+  { id: 'history', label: '历史', icon: Clock },
   { id: 'player', label: '播放', icon: Play, hidden: true },
   { id: 'settings', label: '设置', icon: Settings },
 ];
@@ -106,6 +108,8 @@ export default function App() {
         return <Player active={page === id} target={playerTarget} onNavigate={navigate} />;
       case 'manager':
         return <DownloadManager active={page === id} onNavigate={navigate} />;
+      case 'history':
+        return <History />;
       case 'settings':
         return <SettingsPage active={page === id} />;
       case 'download':

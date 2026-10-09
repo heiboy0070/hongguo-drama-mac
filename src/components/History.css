@@ -1,0 +1,16 @@
+/* 观看历史：海报网格。形态对齐原生版 hongguo-macos 的 LibraryListView(kind: .history)。 */
+.history-container { width: 100%; max-width: 1180px; margin: 0 auto; }
+.history-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 22px; }
+.history-header h2 { font-size: 28px; font-weight: 700; letter-spacing: -.035em; color: var(--text-primary); }
+.history-count { font-size: 12px; color: var(--text-secondary); }
+.history-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 22px 18px; }
+.history-card { display: flex; flex-direction: column; gap: 8px; padding: 0; border: 0; background: transparent; text-align: left; }
+.history-cover { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; background: var(--bg-inset); color: var(--text-tertiary); }
+.history-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.history-title { font-size: 13px; font-weight: 500; color: var(--text-primary); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.history-remark { font-size: 11px; color: var(--text-tertiary); }
+.history-loading { padding: 60px 0; color: var(--text-tertiary); font-size: 13px; }
+.history-empty { padding: 76px 24px; min-height: 340px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 12px; color: var(--text-tertiary); }
+.history-empty > svg { color: #a29a90; stroke-width: 1.2; margin-bottom: 6px; }
+.history-empty h3 { font-size: 19px; font-weight: 600; color: var(--text-primary); letter-spacing: -.02em; }
+.history-empty p { font-size: 13px; color: var(--text-secondary); max-width: 52ch; line-height: 1.8; }
