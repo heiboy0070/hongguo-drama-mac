@@ -8,13 +8,18 @@ import Browse from './components/Browse';
 import { formatAccel, bossKeyWarning } from './bossKey';
 import { readThemePreference, applyTheme, watchSystemTheme } from './theme';
 
+// 导航项。player 用 hidden 标记:它仍然是一个可路由的页面(点"立即播放"或
+// 侧栏最近观看会切过去),但**不作为导航项出现** —— 播放是内容区的一个状态,
+// 不是用户主动要去的目的地。
 const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
   { id: 'download', label: '搜索与下载', icon: Search },
-  { id: 'player', label: '我的剧库', icon: Play },
   { id: 'manager', label: '下载管理', icon: Download },
+  { id: 'player', label: '播放', icon: Play, hidden: true },
   { id: 'settings', label: '设置', icon: Settings },
 ];
+
+const NAV_ITEMS = MENU.filter((item) => !item.hidden && item.id !== 'settings');
 
 export default function App() {
   // 导航状态记忆:回到上次所在的页面。用同步的 localStorage 读,
@@ -122,7 +127,7 @@ export default function App() {
         </div>
         <nav className="sidebar-menu">
           <div className="sidebar-group-label">内容</div>
-          {MENU.filter((item) => item.id !== 'settings').map((item) => {
+          {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             return (
               <button key={item.id} className={`sidebar-item ${page === item.id ? 'active' : ''}`}
