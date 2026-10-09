@@ -10,6 +10,16 @@
   --success: #33745c; --danger: #ba3438; --warning: #9a681e;
   --radius-sm: 6px; --radius: 9px; --radius-lg: 14px;
   --shadow-sm: 0 2px 5px #29231b08; --shadow-md: 0 8px 24px #29231b10; --shadow-lg: 0 24px 64px #29231b29;
+  --shadow-lift: 0 10px 26px #29231b1f, 0 2px 6px #29231b0f;
+
+  /* 动效 token:全站唯一的时长与缓动来源。新增动画一律引用变量,不要写字面量,
+     否则各处时长不一致会直接表现为“不连贯”。 */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --ease-spring: cubic-bezier(.34, 1.32, .64, 1);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #root { height: 100%; }
@@ -17,7 +27,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang 
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; color: inherit; }
 button, input, select, a { -webkit-app-region: no-drag; }
-button:disabled { opacity: .45; cursor: not-allowed; }
+/* 禁用态不能只靠 opacity 压暗:那会把底色和文字一起洗淡。
+   实测主按钮(白字压浅粉)对比只有 ≈2.2:1,标签几乎读不出来。
+   改成中性底 + 明确的次要文字色,禁用与"已开启"的粉色也不再混淆。 */
+button:disabled { cursor: not-allowed; opacity: 1; }
+.btn:disabled, .btn-chip:disabled, .icon-btn:disabled, .ep-chip:disabled {
+  background: var(--bg-inset); color: var(--text-secondary); border-color: var(--border); box-shadow: none; transform: none;
+}
+.btn-primary:disabled, .btn-chip-primary:disabled, .btn-danger-solid:disabled {
+  background: var(--bg-inset); color: var(--text-secondary); border-color: var(--border);
+}
 button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 3px solid #c8383d80; outline-offset: 3px; }
 input:focus-visible, select:focus-visible { outline: 3px solid #c8383d25; outline-offset: 1px; border-color: var(--accent); }
 ::selection { background: #efd0ce; color: #252523; }
@@ -37,18 +56,58 @@ input::placeholder { color: #79766f; }
 .brand-sub { font-size: 10px; margin-top: 2px; color: var(--text-secondary); }
 .sidebar-menu { display: flex; flex: 1; flex-direction: column; gap: 5px; padding: 0 12px; }
 .sidebar-group-label { font-size: 11px; font-weight: 600; color: var(--text-tertiary); padding: 0 12px 6px; }
-.sidebar-item { width: 100%; display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 0; border-radius: 8px; text-align: left; background: transparent; color: #5e5a54; font-size: 13px; transition: background .15s; }
+.sidebar-item { position: relative; width: 100%; display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 0; border-radius: 8px; text-align: left; background: transparent; color: #5e5a54; font-size: 13px; transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+/* 活动态用独立的可动画图层承载:淡入 + 轻微放大,而不是直接换 background(那样是硬切) */
+.sidebar-item::before { content: ''; position: absolute; inset: 0; border-radius: 8px; background: #e8ded9; opacity: 0; transform: scale(.94); pointer-events: none; transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-spring); }
 .sidebar-item:hover { background: var(--sidebar-hover); }
-.sidebar-item.active { background: #e8ded9; color: #a5292e; font-weight: 600; }
+.sidebar-item.active { background: transparent; color: #a5292e; font-weight: 600; }
+.sidebar-item.active::before { opacity: 1; transform: none; }
+.sidebar-item > * { position: relative; }
 .sidebar-item svg { flex-shrink: 0; }
 .sidebar-footer { padding: 12px; }
 .footer-note { display: flex; justify-content: space-between; padding: 18px 12px 7px; margin-top: 10px; border-top: 1px solid var(--border); color: var(--text-tertiary); font-size: 10px; }
+/* 老板键提示:常驻但克制,只做"可发现性",不抢注意力。
+   键帽符号放大加粗、与说明文字紧贴,否则 1x 下要凑近看,且"哪个键对应哪个动作"分不清。 */
+.boss-key-hint { display: flex; flex-direction: column; gap: 6px; padding: 12px 12px 0; }
+.boss-key-keys { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-size: 11px; }
+.boss-key-keys kbd { font-family: inherit; font-size: 11px; font-weight: 600; letter-spacing: .06em; padding: 3px 7px; border-radius: 5px; background: #eae6e0; border: 1px solid #d3cdc4; border-bottom-width: 2px; color: #4a4640; }
+.app-boss-warning { background: #fdf1e3; color: #8a5312; }
 .main-wrapper { min-width: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .window-toolbar { height: 48px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 34px; -webkit-app-region: drag; user-select: none; border-bottom: 1px solid var(--border-muted); }
 .toolbar-location { font-weight: 500; font-size: 12px; color: var(--text-secondary); }
 .toolbar-caption { color: var(--text-tertiary); font-size: 11px; }
-.main-content { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 34px 36px 48px; }
-.main-content[hidden], [hidden] { display: none !important; }
+/* 页面栈:访问过的页面全部常驻挂载,靠图层做交叉过渡。
+   这里**不能**用 display:none 切页 —— 它把元素移出布局,过渡无从发生,结果就是硬切。
+   改用 opacity + transform 做 GPU 合成过渡,天然可打断(连点导航会平滑改向,不会排队)。 */
+.page-stack { position: relative; flex: 1; min-height: 0; }
+.main-content {
+  position: absolute; inset: 0; min-width: 0;
+  overflow-y: auto; overflow-x: hidden; padding: 34px 36px 48px;
+  /* 始终预留滚动条槽位。否则"有滚动条的页"与"没滚动条的页"内容宽度不同,
+     切页时整列右边缘会横向跳 8pt —— 这正好破坏页面过渡的连贯感。 */
+  scrollbar-gutter: stable;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translate3d(0, var(--page-enter-y, 10px), 0);
+  /* 隐藏必须等淡出结束,否则元素立刻消失,过渡看不见 */
+  transition: opacity var(--dur-base) var(--ease-out),
+              transform var(--dur-base) var(--ease-out),
+              visibility 0s linear var(--dur-base);
+  will-change: opacity, transform;
+}
+.main-content[data-active='true'] {
+  opacity: 1; visibility: visible; pointer-events: auto; transform: none;
+  /* 入场必须用 animation,不能用 transition:
+     新页面是“这一刻才挂载”的,没有上一个计算样式可过渡,transition 不会触发,
+     结果就是入场直接弹出来(实测 32ms 时已是 opacity 1 / transform none)。
+     animation 在元素出现时就会播放,所以只有它能覆盖首次挂载。
+     这里 transition 只留 visibility,让它立刻生效。 */
+  transition: visibility 0s;
+  animation: page-enter var(--dur-base) var(--ease-out);
+}
+@keyframes page-enter {
+  from { opacity: 0; transform: translate3d(0, var(--page-enter-y, 10px), 0); }
+}
+[hidden] { display: none !important; }
 .app-storage-error { display: flex; align-items: center; gap: 16px; justify-content: space-between; padding: 12px 24px; background: #fae9e7; color: #a52d32; }
 .app-storage-error span { min-width: 0; overflow-wrap: anywhere; }
 .browse-container, .hongguo-container, .dm-container, .player-container { width: 100%; max-width: 1180px; margin: 0 auto; padding: 0; }
@@ -96,6 +155,27 @@ h2, .browse-title h2, .hero-text h2, .settings-header h2, .dm-title h2, .player-
 .ep-missing { opacity: 1; border-style: solid; color: var(--text-secondary); }
 .ep-completed { border-color: #bad0c2; }
 .ep-downloading { border-color: #dc9c98; }
+
+/* 交互反馈:不止变色,补上位移与缩放。只在精确指针设备上启用,
+   触摸设备没有 hover 语义,套用会出现“粘住”的高亮。 */
+@media (hover: hover) and (pointer: fine) {
+  .btn, .btn-chip, .icon-btn, .ep-chip { transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+  .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+  .btn:active:not(:disabled) { transform: translateY(0) scale(.98); box-shadow: none; }
+  .icon-btn:hover:not(:disabled) { transform: translateY(-1px); }
+  .icon-btn:active:not(:disabled) { transform: scale(.93); }
+  .btn-chip:hover:not(:disabled) { transform: translateY(-1px); }
+  .btn-chip:active:not(:disabled) { transform: translateY(0) scale(.97); }
+  .ep-chip:hover:not(:disabled) { transform: translateY(-1px); }
+  .sidebar-item:hover { transform: translateX(1px); }
+  .sidebar-item:active { transform: scale(.985); }
+}
+
+/* 卡片类元素:悬停轻微抬升 + 阴影扩散。位移控制在 2px,避免“跳”。 */
+@media (hover: hover) and (pointer: fine) {
+  .poster-card, .series-card, .episode-card, .browse-card { transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out); }
+  .poster-card:hover, .series-card:hover, .episode-card:hover, .browse-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); }
+}
 @media (max-width: 1060px) { .sidebar { width: 190px; } .sidebar-brand { padding-left: 16px; padding-right: 12px; } .main-content { padding: 28px 26px 40px; } .window-toolbar { padding: 0 26px; } .brand-text { font-size: 17px; } }
 @media (max-width: 760px) { .sidebar { width: 164px; } .brand-sub { display: none; } .sidebar-brand { gap: 8px; } .brand-text { font-size: 15px; } .logo { width: 29px; height: 29px; } .sidebar-item { padding: 10px 8px; gap: 8px; font-size: 12px; } .main-content { padding: 24px 20px; } .window-toolbar { padding: 0 20px; } h2, .browse-title h2, .hero-text h2, .settings-header h2, .dm-title h2, .player-title h2 { font-size: 25px; } .folder-row, .input-group { flex-wrap: wrap; } .folder-row .input-field, .input-group .input-field { flex-basis: 100%; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
