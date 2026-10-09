@@ -27,6 +27,9 @@ export default function App() {
   const [appInfo, setAppInfo] = useState(null); // { version, brand, appName }
   const [bossKey, setBossKey] = useState(null); // 老板键注册状态
   const [bossKeyDismissed, setBossKeyDismissed] = useState(false);
+  // 侧栏的「最近观看」。取 4 条 —— 再多会把侧栏撑长,而这块的作用是"快速回访",
+  // 不是完整列表。
+  const [recent, setRecent] = useState([]);
   const [playerTarget, setPlayerTarget] = useState(null); // 浏览页点播 -> 播放页选中
   // 过渡方向:菜单里往下走 = +1,往上走 = -1。让进出方向跟着导航意图走,
   // 观感才是“连贯”的,而不是每次都用同一个方向。
@@ -46,6 +49,15 @@ export default function App() {
     setVisited((pages) => pages.includes(nextPage) ? pages : [...pages, nextPage]);
     setPage(nextPage);
   }, []);
+
+  // 最近观看:来自主进程持久化的播放进度。拿不到就留空,不影响导航。
+  useEffect(() => {
+    let alive = true;
+    window.electronAPI.recentWatched?.(4)
+      .then((res) => { if (alive && res?.success) setRecent(res.items || []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [page]);   // 切页回来时刷新,刚看过的剧立刻出现在列表里
 
   // 主题:首帧前先落一次,再在"跟随系统"时订阅系统变化
   useEffect(() => {
@@ -120,6 +132,28 @@ export default function App() {
             );
           })}
         </nav>
+
+        {recent.length > 0 && (
+          <section className="recent-list" aria-label="最近观看">
+            <div className="recent-list-label">最近观看</div>
+            {recent.map((item) => (
+              <button
+                key={item.series_id}
+                className="recent-item"
+                title={`${item.title} · 第 ${item.vid_index} 集`}
+                onClick={() => window.electronAPI.playSeries({ seriesId: item.series_id, vidIndex: item.vid_index })}
+              >
+                <span className="recent-item-cover">
+                  {item.cover ? <img src={item.cover} alt="" loading="lazy" /> : <Film size={12} />}
+                </span>
+                <span className="recent-item-text">
+                  <span className="recent-item-title">{item.title}</span>
+                  <span className="recent-item-sub">第 {item.vid_index} 集</span>
+                </span>
+              </button>
+            ))}
+          </section>
+        )}
         <div className="sidebar-footer">
           <button className={`sidebar-item ${page === 'settings' ? 'active' : ''}`}
             aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}>

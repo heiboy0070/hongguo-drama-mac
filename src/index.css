@@ -107,6 +107,25 @@ input::placeholder { color: #79766f; }
 :root[data-theme='dark'] .ep-completed { border-color: #34503f; }
 :root[data-theme='dark'] .ep-downloading { border-color: #5c3436; }
 
+/* 侧栏中下段的「最近观看」list。
+   导航项只有 4 条,下方到页脚之间有大量空白;这里放最近看过的几部,
+   既填满纵向空间,也是回访率最高的一条路径。
+   尺寸对齐 hongguo-macos 的同名区块:封面缩略图小、行高紧、标题单行省略。 */
+.recent-list { display: flex; flex-direction: column; gap: 1px; padding: 0 12px 8px; }
+.recent-list-label { font-size: 10px; font-weight: 600; color: var(--text-tertiary); padding: 0 12px 6px; }
+.recent-item { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; text-align: left; }
+.recent-item-cover { flex-shrink: 0; width: 24px; height: 32px; border-radius: 4px; overflow: hidden; background: var(--bg-inset); color: var(--text-tertiary); display: flex; align-items: center; justify-content: center; }
+.recent-item-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.recent-item-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.recent-item-title { font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-item-sub { font-size: 10px; color: var(--text-tertiary); }
+@media (hover: hover) and (pointer: fine) {
+  .recent-item { transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+  .recent-item:hover { background: var(--sidebar-hover); }
+  .recent-item:active { transform: scale(.985); }
+}
+:root[data-theme='dark'] .recent-item:hover { background: var(--sidebar-hover); }
+
 /* 页面栈:访问过的页面全部常驻挂载,靠图层做交叉过渡。
    这里**不能**用 display:none 切页 —— 它把元素移出布局,过渡无从发生,结果就是硬切。
    改用 opacity + transform 做 GPU 合成过渡,天然可打断(连点导航会平滑改向,不会排队)。 */

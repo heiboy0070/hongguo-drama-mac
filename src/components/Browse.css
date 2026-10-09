@@ -56,21 +56,3 @@
 
 .browse-container .source-control { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; white-space: nowrap; }
 .browse-container .source-control select { width: auto; min-width: 112px; }
-
-/* 最近观看：横向轨道。用 grid-auto-flow 而不是 flex，卡片不会被内容撑成不等宽。 */
-.recent-rail { margin: 4px 0 22px; }
-.recent-rail-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
-.recent-rail-head h3 { font-size: 15px; font-weight: 600; color: var(--text-primary); letter-spacing: -.01em; }
-.recent-rail-hint { font-size: 11px; color: var(--text-tertiary); }
-.recent-rail-track { display: grid; grid-auto-flow: column; grid-auto-columns: 132px; gap: 14px; overflow-x: auto; padding-bottom: 6px; }
-.recent-card { display: flex; flex-direction: column; gap: 6px; padding: 0; border: 0; background: transparent; text-align: left; }
-.recent-card-cover { display: block; width: 132px; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; background: var(--bg-inset); color: var(--text-tertiary); display: flex; align-items: center; justify-content: center; }
-.recent-card-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.recent-card-title { font-size: 12px; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-card-sub { font-size: 11px; color: var(--text-tertiary); }
-@media (hover: hover) and (pointer: fine) {
-  .recent-card { transition: transform var(--dur-base) var(--ease-out); }
-  .recent-card:hover { transform: translateY(-2px); }
-  .recent-card:hover .recent-card-cover { box-shadow: var(--shadow-lift); }
-  .recent-card-cover { transition: box-shadow var(--dur-base) var(--ease-out); }
-}
