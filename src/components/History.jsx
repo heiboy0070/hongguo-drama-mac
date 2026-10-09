@@ -9,7 +9,7 @@ import { Film } from './icons';
  * 海报网格 + 「观看历史 / N 部」头部,每张卡片带「第 N 集」备注。
  * 数据取自主进程持久化的播放进度(含标题与封面)。
  */
-export default function History() {
+export default function History({ onOpen }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -30,9 +30,8 @@ export default function History() {
 
   useEffect(() => { load(); }, [load]);
 
-  const play = (item) => {
-    window.electronAPI.playSeries({ seriesId: item.series_id, vidIndex: item.vid_index });
-  };
+  // 点卡片打开详情页(与原生版一致),而不是直接跳播放页
+  const play = (item) => { onOpen?.(item); };
 
   if (loading) {
     return (

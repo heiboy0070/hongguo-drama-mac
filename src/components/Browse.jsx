@@ -17,7 +17,7 @@ const LIST_TIMEOUT_MS = 25_000;
  *         -> 复用 get-series-episodes 拿到每集「已下载/下载中/未下载」状态
  *         -> 跳播放器 或 走既有批量下载
  */
-function Browse({ onNavigate, active = true }) {
+function Browse({ onNavigate, active = true, target = null }) {
   const [source, setSource] = useState('hongguo');
   const [categories, setCategories] = useState([]);
   const [category, setCategory] = useState('real-drama');
@@ -212,6 +212,14 @@ function Browse({ onNavigate, active = true }) {
     setPage(next);
     document.querySelector('.main-content:not([hidden])')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  // 外部(如历史页)指定要看的剧:打开它的详情页,而不是跳去播放页。
+  // 原生版就是这个流程 —— 历史卡片 → open(drama) → 详情页。
+  useEffect(() => {
+    if (!target?.seriesId) return;
+    openSeries({ series_id: target.seriesId });
+    // 依赖 ts 而非 seriesId:连续点同一部剧也要能重新打开
+  }, [target?.ts]);
 
   // ===== 打开某部剧 =====
   const openSeries = async (item) => {
