@@ -8,7 +8,7 @@
  *   4. 下载管理：进度推送、暂停/取消、重试、删除、打开所在文件夹
  *   5. 设置：下载目录、命名规则、并发数（JSON 文件持久化）
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, session, protocol, Menu, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, protocol, Menu, globalShortcut, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -123,6 +123,8 @@ let MAX_CONCURRENT_DOWNLOADS = 3;
 function getDefaultSettings() {
   return {
     root: app.getPath('downloads'),
+    // 主窗几何。null = 首次运行,用内置默认尺寸并居中。
+    window_bounds: null,
     // 文件命名模板：可用变量 剧名(series_title) 集数(vid_index) 标题(ep_title)
     name_format: '剧名 集数',
     max_concurrent: 3,
@@ -2879,11 +2881,56 @@ function setBossHidden(hidden) {
 // 渲染进程据此展示"快捷键是否可用";注册失败必须有可见提示,不能静默。
 ipcMain.handle('boss-key-status', () => bossKeyStatus());
 
+
+// ===== 主窗几何记忆 =====
+// 只记"位置 + 尺寸",不记最大化/全屏状态 —— 那两个由用户当下的意图决定,
+// 恢复成全屏反而会打断"打开就想干点别的"的场景。
+const DEFAULT_WINDOW_SIZE = { width: 1100, height: 750 };
+
+/** 读取上次的窗口几何,并校验它仍落在某块屏幕的可见区域内 */
+function savedWindowBounds() {
+  const raw = getCurrentSettings().window_bounds;
+  if (!raw || typeof raw !== 'object') return null;
+  const b = {
+    x: Number(raw.x), y: Number(raw.y),
+    width: Number(raw.width), height: Number(raw.height),
+  };
+  if (![b.x, b.y, b.width, b.height].every(Number.isFinite)) return null;
+  if (b.width < 900 || b.height < 620) return null;   // 低于最小尺寸的记录一律丢弃
+
+  // 外接屏拔掉后,旧坐标可能落在不存在的屏幕上。要求窗口至少有一部分
+  // 与某块屏幕的工作区相交,否则放弃恢复、退回默认居中。
+  const visible = screen.getAllDisplays().some((d) => {
+    const wa = d.workArea;
+    return b.x < wa.x + wa.width && b.x + b.width > wa.x
+        && b.y < wa.y + wa.height && b.y + b.height > wa.y;
+  });
+  return visible ? b : null;
+}
+
+let boundsSaveTimer = null;
+/** 拖动/缩放会连续触发,这里做防抖,避免频繁写盘 */
+function rememberWindowBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
+  if (boundsSaveTimer) clearTimeout(boundsSaveTimer);
+  boundsSaveTimer = setTimeout(() => {
+    boundsSaveTimer = null;
+    try {
+      const b = mainWindow.getBounds();
+      const settings = getCurrentSettings();
+      store.saveSettings({ ...settings, window_bounds: b });
+    } catch (e) {
+      console.warn('[窗口] 几何保存失败:', e.message);
+    }
+  }, 400);
+}
+
 // ===== 窗口创建 =====
 function createWindow() {
+  const savedBounds = savedWindowBounds();
   mainWindow = new BrowserWindow({
-    width: 1100,
-    height: 750,
+    ...(savedBounds || DEFAULT_WINDOW_SIZE),
     minWidth: 900,
     minHeight: 620,
     title: APP_TITLE,
@@ -2913,6 +2960,10 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, 'dist-react', 'index.html'));
   }
+
+  // 几何变化即时记住(防抖),这样即使用户直接退出也能留下最后一次位置
+  mainWindow.on('resize', rememberWindowBounds);
+  mainWindow.on('move', rememberWindowBounds);
 
   mainWindow.on('closed', () => {
     clearOnlineCache();
