@@ -15,6 +15,10 @@ function Player({ target, onNavigate, active = true }) {
   const [seriesList, setSeriesList] = useState([]);
   const [activeSeriesId, setActiveSeriesId] = useState('');
   const [detail, setDetail] = useState(null); // { series_title, episodes: [...], total, completedCount }
+  // 保存播放进度时要把剧名一并存下(观看历史要用)。回调里可能读到旧的 detail,
+  // 所以用 ref 取最新值。上一版漏了这个声明,导致一触发播放就抛 ReferenceError。
+  const detailRef = useRef(null);
+  useEffect(() => { detailRef.current = detail; }, [detail]);
   const [currentIndex, setCurrentIndex] = useState(1);
   const [autoNext, setAutoNext] = useState(true);
   const [waitingFor, setWaitingFor] = useState(null); // 正在等待下载的集号
