@@ -417,7 +417,7 @@ function Player({ target, onNavigate, active = true }) {
       const request = { requestId: crypto.randomUUID(), vid: ep.vid };
       onlineRequestRef.current = request;
       pendingSeekRef.current = seekTo;
-      window.electronAPI.savePlaybackPosition(activeSeriesId, vidIndex, seekTo).catch(() => {});
+      window.electronAPI.savePlaybackPosition(activeSeriesId, vidIndex, seekTo, { title: detailRef.current?.series_title, cover: ep?.cover }).catch(() => {});
       setCurrentIndex(vidIndex);
       setWaitingFor(null);
       setOnlineProgress({ vid: ep.vid, percent: 0, phase: 'preparing' });
@@ -474,7 +474,7 @@ function Player({ target, onNavigate, active = true }) {
       setCurrentIndex(vidIndex);
       setWaitingFor(null);
       pendingSeekRef.current = seekTo;
-      window.electronAPI.savePlaybackPosition(activeSeriesId, vidIndex, seekTo).catch(() => {});
+      window.electronAPI.savePlaybackPosition(activeSeriesId, vidIndex, seekTo, { title: detailRef.current?.series_title, cover: ep?.cover }).catch(() => {});
     },
     [episodes, activeSeriesId, resetPlayback, startOnlinePlay, currentPosition]
   );

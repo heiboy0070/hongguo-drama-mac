@@ -6,6 +6,7 @@ import SettingsPage from './components/Settings';
 import Player from './components/Player';
 import Browse from './components/Browse';
 import { formatAccel, bossKeyWarning } from './bossKey';
+import { readThemePreference, applyTheme, watchSystemTheme } from './theme';
 
 const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
@@ -16,7 +17,11 @@ const MENU = [
 ];
 
 export default function App() {
-  const [page, setPage] = useState('browse');
+  // 导航状态记忆:回到上次所在的页面。用同步的 localStorage 读,
+  // 避免先渲染首页再跳走造成的闪烁。
+  const [page, setPage] = useState(() => {
+    try { return localStorage.getItem('hongguo.page') || 'browse'; } catch { return 'browse'; }
+  });
   const [visited, setVisited] = useState(['browse']);
   const [storageError, setStorageError] = useState('');
   const [appInfo, setAppInfo] = useState(null); // { version, brand, appName }
@@ -36,9 +41,17 @@ export default function App() {
     const from = pageRef.current;
     if (!nextPage || nextPage === from) return;
     pageRef.current = nextPage;
+    try { localStorage.setItem('hongguo.page', nextPage); } catch { /* 存不下只影响本次会话 */ }
     setDir(indexOfPage(nextPage) >= indexOfPage(from) ? 1 : -1);
     setVisited((pages) => pages.includes(nextPage) ? pages : [...pages, nextPage]);
     setPage(nextPage);
+  }, []);
+
+  // 主题:首帧前先落一次,再在"跟随系统"时订阅系统变化
+  useEffect(() => {
+    const preference = readThemePreference();
+    applyTheme(preference);
+    return watchSystemTheme(preference, () => {});
   }, []);
 
   useEffect(() => {

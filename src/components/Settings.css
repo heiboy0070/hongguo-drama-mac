@@ -372,3 +372,9 @@
 .boss-key-state { margin-left: auto; font-size: 12px; }
 .boss-key-state.ok { color: var(--success); }
 .boss-key-state.bad { color: var(--danger); }
+
+/* 外观切换：三段式选择。选中态不只靠颜色，同时加边框与字重，弱视也能分辨。 */
+.theme-choices { display: inline-flex; gap: 6px; }
+.theme-choice { padding: 7px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-secondary); font-size: 13px; }
+.theme-choice:hover { background: var(--bg-inset); color: var(--text-primary); }
+.theme-choice.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }

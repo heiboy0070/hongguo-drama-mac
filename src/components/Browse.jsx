@@ -21,6 +21,7 @@ function Browse({ onNavigate, active = true }) {
   const [source, setSource] = useState('hongguo');
   const [categories, setCategories] = useState([]);
   const [category, setCategory] = useState('real-drama');
+  const [recent, setRecent] = useState([]);
   const [genre, setGenre] = useState('');
   const [page, setPage] = useState(1);
 
@@ -158,6 +159,16 @@ function Browse({ onNavigate, active = true }) {
     },
     [invalidateList, source]
   );
+
+  // 最近观看:数据来自主进程持久化的播放进度(含标题/封面)。
+  // 失败时静默留空 —— 首页的主职责是发现片单,历史拿不到不该打断它。
+  useEffect(() => {
+    let alive = true;
+    window.electronAPI.recentWatched?.(12)
+      .then((res) => { if (alive && res?.success) setRecent(res.items || []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     loadCategories();
@@ -350,6 +361,31 @@ function Browse({ onNavigate, active = true }) {
           </button>}
         </div>
       </div>
+
+      {recent.length > 0 && (
+        <section className="recent-rail" aria-label="最近观看">
+          <div className="recent-rail-head">
+            <h3>最近观看</h3>
+            <span className="recent-rail-hint">按上次看到的位置继续</span>
+          </div>
+          <div className="recent-rail-track">
+            {recent.map((item) => (
+              <button
+                key={item.series_id}
+                className="recent-card"
+                title={`${item.title} · 第 ${item.vid_index} 集`}
+                onClick={() => window.electronAPI.playSeries({ seriesId: item.series_id, vidIndex: item.vid_index })}
+              >
+                <span className="recent-card-cover">
+                  {item.cover ? <img src={item.cover} alt="" loading="lazy" /> : <Film size={18} />}
+                </span>
+                <span className="recent-card-title">{item.title}</span>
+                <span className="recent-card-sub">看到第 {item.vid_index} 集</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* 分类 tab */}
       {source === 'hongguo' && <div className="browse-cats">

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
 import './Settings.css';
 import { formatAccel, bossKeyWarning } from '../bossKey';
+import { readThemePreference, applyTheme, saveThemePreference, watchSystemTheme } from '../theme';
 import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
 
 
@@ -54,6 +55,7 @@ function SettingsPage({ active = true }) {
   const [dirty, setDirty] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [bossKey, setBossKey] = useState(null);
+  const [themePref, setThemePref] = useState(() => readThemePreference());
 
   // 老板键信息放在设置里,不占首页。注册失败时必须能被看到。
   useEffect(() => {
@@ -272,6 +274,32 @@ function SettingsPage({ active = true }) {
         </div>
         {saveError && !proxyOpen && <p className="alert alert-error" role="alert">{saveError}</p>}
       </fieldset>
+
+      <div className="settings-card">
+        <div className="settings-group">
+          <label className="settings-label">外观</label>
+          <p className="settings-hint">深色模式下海报与文字会一并切换，不会出现刺眼的白块。</p>
+          <div className="theme-choices" role="radiogroup" aria-label="外观">
+            {[['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={themePref === value}
+                className={`theme-choice ${themePref === value ? 'active' : ''}`}
+                onClick={() => {
+                  setThemePref(value);
+                  applyTheme(value);
+                  saveThemePreference(value);
+                  watchSystemTheme(value, () => {});
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {bossKey && (
         <div className="settings-card boss-key-card">

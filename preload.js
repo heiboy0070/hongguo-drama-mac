@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   savePlaybackPosition: (seriesId, vidIndex, currentTime) =>
     ipcRenderer.invoke('save-playback-position', seriesId, vidIndex, currentTime),
   getPlaybackPosition: (seriesId) => ipcRenderer.invoke('get-playback-position', seriesId),
+  recentWatched: (limit) => ipcRenderer.invoke('recent-watched', limit),
 
   // 一键合并
   getFfmpegStatus: () => ipcRenderer.invoke('get-ffmpeg-status'),

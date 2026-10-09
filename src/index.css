@@ -71,6 +71,42 @@ input::placeholder { color: #79766f; }
 .window-toolbar { height: 48px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 34px; -webkit-app-region: drag; user-select: none; border-bottom: 1px solid var(--border-muted); }
 .toolbar-location { font-weight: 500; font-size: 12px; color: var(--text-secondary); }
 .toolbar-caption { color: var(--text-tertiary); font-size: 11px; }
+/* ===== 深色主题 =====
+   用 :root[data-theme='dark'] 而不是 [data-theme]，靠特异性稳压 :root 一层，
+   不依赖声明顺序。只覆盖语义 token；下面另有一小段处理历史遗留的硬编码浅色。 */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #1c1b1a; --sidebar-bg: #232221; --sidebar-hover: #2e2c2a;
+  --primary: #e2565a; --primary-hover: #ef6a6e; --accent: #e2565a; --accent-hover: #ef6a6e; --accent-soft: #3a2426;
+  --text: #ecebe8; --text-primary: #ecebe8; --text-sub: #a8a5a0; --text-secondary: #a8a5a0; --text-tertiary: #8b8781;
+  --card-bg: #262524; --bg-canvas: #1c1b1a; --bg-subtle: #232221; --bg-inset: #2e2c2a; --bg-elevated: #262524; --bg-sidebar: #232221;
+  --bg-primary: #1c1b1a; --bg-secondary: #232221; --bg-card: #262524; --bg-tertiary: #2e2c2a; --bg-hover: #302e2c; --bg-input: #2a2827;
+  --border: #383634; --border-default: #383634; --border-muted: #2f2d2b; --border-strong: #4a4744; --border-color: #383634;
+  --success: #6fbf95; --danger: #ef6b6f; --warning: #d7a44e;
+  --shadow-sm: 0 2px 5px #00000040; --shadow-md: 0 8px 24px #00000059; --shadow-lg: 0 24px 64px #000000a6;
+  --shadow-lift: 0 10px 26px #00000073, 0 2px 6px #0000004d;
+}
+/* 历史遗留的硬编码浅色：换成深色对应值，否则切过去会露出白块 */
+:root[data-theme='dark'] body { background: var(--bg); }
+:root[data-theme='dark'] .sidebar-item { color: #b3b0aa; }
+:root[data-theme='dark'] .sidebar-item::before { background: #3a3735; }
+:root[data-theme='dark'] .sidebar-item.active { color: #f08a8d; }
+:root[data-theme='dark'] ::-webkit-scrollbar-thumb { background: #4a4744; border-color: var(--bg); }
+:root[data-theme='dark'] ::selection { background: #5a3436; color: #f2f0ed; }
+:root[data-theme='dark'] .app-storage-error { background: #3a2426; color: #f0a9ab; }
+:root[data-theme='dark'] .app-boss-warning { background: #3a3022; color: #e0b877; }
+:root[data-theme='dark'] .alert-error { background: #3a2426; color: #f0a9ab; border-color: #5c3436; }
+:root[data-theme='dark'] .alert-success { background: #1f3129; color: #8fd0ac; border-color: #2f4a3c; }
+:root[data-theme='dark'] .dm-toast { background: #35332f; }
+:root[data-theme='dark'] .browse-drawer-mask, :root[data-theme='dark'] .proxy-modal-mask, :root[data-theme='dark'] .player-confirm-mask { background: #000000a6; }
+:root[data-theme='dark'] .btn { background: var(--bg-elevated); }
+:root[data-theme='dark'] .btn:hover:not(:disabled) { background: var(--bg-inset); }
+:root[data-theme='dark'] .btn-chip:hover:not(:disabled) { background: #3a3735; }
+:root[data-theme='dark'] .icon-btn-danger:hover { background: #3a2426; }
+:root[data-theme='dark'] input::placeholder { color: #7d7a75; }
+:root[data-theme='dark'] .ep-completed { border-color: #34503f; }
+:root[data-theme='dark'] .ep-downloading { border-color: #5c3436; }
+
 /* 页面栈:访问过的页面全部常驻挂载,靠图层做交叉过渡。
    这里**不能**用 display:none 切页 —— 它把元素移出布局,过渡无从发生,结果就是硬切。
    改用 opacity + transform 做 GPU 合成过渡,天然可打断(连点导航会平滑改向,不会排队)。 */

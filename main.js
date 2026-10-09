@@ -1440,17 +1440,50 @@ ipcMain.handle('get-series-episodes', async (event, seriesId) => {
 });
 
 // 断点续播
-ipcMain.handle('save-playback-position', async (event, seriesId, vidIndex, currentTime) => {  try {
+ipcMain.handle('save-playback-position', async (event, seriesId, vidIndex, currentTime, meta = {}) => {  try {
     const map = store.getPlayback() || {};
-    map[String(seriesId)] = {
+    const key = String(seriesId);
+    const prev = map[key] || {};
+    map[key] = {
       vid_index: Number(vidIndex) || 1,
       currentTime: Number(currentTime) || 0,
       updatedAt: Date.now(),
+      // 标题/封面随进度一起存:观看历史要能显示剧名与海报,而剧集库只收录已下载的剧,
+      // 只看不下的剧在别处拿不到元数据。调用方没传时保留旧值,避免把已有信息抹掉。
+      title: String(meta.title || prev.title || '').trim(),
+      cover: String(meta.cover || prev.cover || '').trim(),
     };
     store.savePlayback(map);
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };
+  }
+});
+
+/**
+ * 观看历史:按最近观看时间倒序返回可直接渲染的条目。
+ * 只返回仍有意义的记录(有标题、进度有效),并把"是否已看完"算好交给界面,
+ * 免得渲染层各自判一遍而标准不一。
+ */
+ipcMain.handle('recent-watched', async (_event, limit = 12) => {
+  try {
+    const map = store.getPlayback() || {};
+    const max = Math.max(1, Math.min(Number(limit) || 12, 50));
+    const rows = Object.entries(map)
+      .map(([seriesId, v]) => ({
+        series_id: seriesId,
+        title: String(v && v.title || '').trim(),
+        cover: String(v && v.cover || '').trim(),
+        vid_index: Number(v && v.vid_index) || 1,
+        currentTime: Number(v && v.currentTime) || 0,
+        updatedAt: Number(v && v.updatedAt) || 0,
+      }))
+      .filter((r) => r.title && r.updatedAt > 0)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, max);
+    return { success: true, items: rows };
+  } catch (error) {
+    return { success: false, items: [], error: error.message };
   }
 });
 
