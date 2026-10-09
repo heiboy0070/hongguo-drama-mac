@@ -8,7 +8,7 @@
  *   4. 下载管理：进度推送、暂停/取消、重试、删除、打开所在文件夹
  *   5. 设置：下载目录、命名规则、并发数（JSON 文件持久化）
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, session, protocol, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, protocol, Menu, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -2821,6 +2821,64 @@ ipcMain.handle('open-external-url', async (event, url) => {
   }
 });
 
+// ===== 老板键 =====
+// Electron 的 globalShortcut 是**真·全局**的:应用失焦时同样生效。这正是老板键需要的能力,
+// 但也意味着不能占用 Ctrl+X / Ctrl+Z 这类系统级常用键 —— 那会把系统里所有应用的剪切/撤销抢走。
+// 因此这里用冷门组合。
+const BOSS_HIDE_ACCELERATOR = 'Control+Shift+X';
+const BOSS_SHOW_ACCELERATOR = 'Control+Shift+Z';
+const bossKeyState = { hideRegistered: false, showRegistered: false };
+
+// 注册失败时 Electron **不抛异常,只返回 false**。不检查返回值的话,用户按下去毫无反应
+// 且得不到任何提示 —— 这是最典型的静默失败,所以必须逐项校验并回报给渲染进程。
+function registerBossKeys() {
+  bossKeyState.hideRegistered = globalShortcut.register(BOSS_HIDE_ACCELERATOR, () => setBossHidden(true));
+  bossKeyState.showRegistered = globalShortcut.register(BOSS_SHOW_ACCELERATOR, () => setBossHidden(false));
+  const failed = bossKeyStatus().failed;
+  if (failed.length) {
+    console.warn('[老板键] 注册失败(通常是被其它应用占用):', failed.join(', '));
+  } else {
+    console.log(`[老板键] ${BOSS_HIDE_ACCELERATOR} 隐身 / ${BOSS_SHOW_ACCELERATOR} 唤回`);
+  }
+  return bossKeyStatus();
+}
+
+function bossKeyStatus() {
+  return {
+    hide: BOSS_HIDE_ACCELERATOR,
+    show: BOSS_SHOW_ACCELERATOR,
+    hideRegistered: bossKeyState.hideRegistered,
+    showRegistered: bossKeyState.showRegistered,
+    failed: [
+      ...(bossKeyState.hideRegistered ? [] : [BOSS_HIDE_ACCELERATOR]),
+      ...(bossKeyState.showRegistered ? [] : [BOSS_SHOW_ACCELERATOR]),
+    ],
+  };
+}
+
+function setBossHidden(hidden) {
+  // 唤回键没注册成功时**禁止隐身**:否则窗口隐下去就再也叫不回来。
+  // 这是"宁可不禁用,也不能让用户把窗口弄丢"的取舍。
+  if (hidden && !bossKeyState.showRegistered) {
+    console.warn('[老板键] 唤回键未注册成功,已拒绝隐身以免窗口无法恢复');
+    return;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (hidden) {
+    if (!mainWindow.isVisible()) return; // 幂等:已经隐藏就什么都不做
+    // 搜索窗是独立窗口,只隐主窗的话"隐身"不彻底,屏幕上仍留一块
+    if (searchWindow && !searchWindow.isDestroyed() && searchWindow.isVisible()) searchWindow.hide();
+    mainWindow.hide();
+  } else {
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+}
+
+// 渲染进程据此展示"快捷键是否可用";注册失败必须有可见提示,不能静默。
+ipcMain.handle('boss-key-status', () => bossKeyStatus());
+
 // ===== 窗口创建 =====
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -2927,8 +2985,15 @@ app.whenReady().then(async () => {
     ]));
   }
   createWindow();
+  registerBossKeys();
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// 全局快捷键会一直占用到进程真正退出。不在这里释放,开发模式每次热重载都会累积一层注册,
+// 最终表现为"快捷键被自己占用、注册失败"。
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });

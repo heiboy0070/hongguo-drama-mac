@@ -5,6 +5,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
 
+  // 老板键(全局快捷键)状态:用于在注册失败时给出可见提示
+  bossKeyStatus: () => ipcRenderer.invoke('boss-key-status'),
+
 
   // 红果解析与下载
   hongguoResolve: (input) => ipcRenderer.invoke('hongguo-resolve', input),
