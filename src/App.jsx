@@ -5,6 +5,7 @@ import DownloadManager from './components/DownloadManager';
 import SettingsPage from './components/Settings';
 import Player from './components/Player';
 import Browse from './components/Browse';
+import { formatAccel, bossKeyWarning } from './bossKey';
 
 const MENU = [
   { id: 'browse', label: '发现短剧', icon: Home },
@@ -13,24 +14,6 @@ const MENU = [
   { id: 'manager', label: '下载管理', icon: Download },
   { id: 'settings', label: '设置', icon: Settings },
 ];
-
-// 把 Electron 的 accelerator 写法转成 macOS 习惯的符号显示
-const formatAccel = (accel) => (accel || '')
-  .replace(/CommandOrControl|CmdOrCtrl|Command|Cmd/g, '⌘')
-  .replace(/Control|Ctrl/g, '⌃')
-  .replace(/Shift/g, '⇧')
-  .replace(/Alt|Option/g, '⌥')
-  .replace(/\+/g, ' ');
-
-// 老板键注册失败时的用户提示:说清发生了什么 + 下一步能做什么,不出现内部术语
-const bossKeyWarning = (status) => {
-  const hide = formatAccel(status.hide);
-  const show = formatAccel(status.show);
-  if (!status.showRegistered) {
-    return `唤回窗口的快捷键（${show}）被其它应用占用。为避免窗口隐藏后找不回来，隐身功能已暂时停用。关闭占用该快捷键的应用，再重新打开本应用即可恢复。`;
-  }
-  return `隐身快捷键（${hide}）被其它应用占用，暂时无法使用。关闭占用该快捷键的应用，再重新打开本应用即可恢复。`;
-};
 
 export default function App() {
   const [page, setPage] = useState('browse');
@@ -129,12 +112,6 @@ export default function App() {
             aria-current={page === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}>
             <Settings size={19} /><span>设置</span>
           </button>
-          {bossKey?.hideRegistered && (
-            <div className="boss-key-hint" title={`按 ${bossKey.hide} 隐藏窗口，按 ${bossKey.show} 唤回`}>
-              <span className="boss-key-keys"><kbd>{formatAccel(bossKey.hide)}</kbd><span>隐身</span></span>
-              <span className="boss-key-keys"><kbd>{formatAccel(bossKey.show)}</kbd><span>唤回</span></span>
-            </div>
-          )}
           <div className="footer-note"><span>红果短剧</span><span>{appInfo?.version ? `v${appInfo.version}` : ''}</span></div>
         </div>
       </aside>

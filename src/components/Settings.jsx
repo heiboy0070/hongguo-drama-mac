@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import useDialogKeyboard from './useDialogKeyboard';
 import './Settings.css';
+import { formatAccel, bossKeyWarning } from '../bossKey';
 import { Settings, Folder, Check, Globe, X, RefreshCw, AlertCircle } from './icons';
 
 
@@ -52,6 +53,12 @@ function SettingsPage({ active = true }) {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [bossKey, setBossKey] = useState(null);
+
+  // 老板键信息放在设置里,不占首页。注册失败时必须能被看到。
+  useEffect(() => {
+    window.electronAPI.bossKeyStatus?.().then(setBossKey).catch(() => {});
+  }, []);
   const testVersion = useRef(0);
   const savingRef = useRef(false);
   const savedTimer = useRef(null);
@@ -265,6 +272,34 @@ function SettingsPage({ active = true }) {
         </div>
         {saveError && !proxyOpen && <p className="alert alert-error" role="alert">{saveError}</p>}
       </fieldset>
+
+      {bossKey && (
+        <div className="settings-card boss-key-card">
+          <div className="settings-group">
+            <label className="settings-label">老板键</label>
+            <p className="settings-hint">在其它应用前台时也能隐藏或唤回窗口。</p>
+            <div className="boss-key-rows">
+              <div className="boss-key-row">
+                <span className="boss-key-keys"><kbd>{formatAccel(bossKey.hide)}</kbd></span>
+                <span>隐藏窗口</span>
+                <span className={bossKey.hideRegistered ? 'boss-key-state ok' : 'boss-key-state bad'}>
+                  {bossKey.hideRegistered ? '可用' : '被占用'}
+                </span>
+              </div>
+              <div className="boss-key-row">
+                <span className="boss-key-keys"><kbd>{formatAccel(bossKey.show)}</kbd></span>
+                <span>唤回窗口</span>
+                <span className={bossKey.showRegistered ? 'boss-key-state ok' : 'boss-key-state bad'}>
+                  {bossKey.showRegistered ? '可用' : '被占用'}
+                </span>
+              </div>
+            </div>
+            {bossKey.failed?.length > 0 && (
+              <p className="alert alert-error" role="alert">{bossKeyWarning(bossKey)}</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {proxyOpen && proxyDraft && (
         <div className="proxy-modal-mask" onClick={() => !saving && closeProxy()}>
