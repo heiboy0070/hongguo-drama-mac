@@ -12,6 +12,9 @@ build/ffmpeg/*
 !build/ffmpeg/COPYING.*
 !build/ffmpeg/LICENSE.md
 
+# 边车内置的 ffmpeg（与 build/ffmpeg 同理：由 npm run setup:ffmpeg:mac 重建，不入库）
+sidecar/bin/
+
 # 构建与打包输出
 release/
 out/

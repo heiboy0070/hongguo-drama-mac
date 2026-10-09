@@ -13,6 +13,11 @@
  *      不能只靠 PATH —— 从访达启动的 .app 不继承终端的 PATH。
  *
  * 启动：node sidecar/server.mjs [--port 8787]
+ *
+ * 依赖内置 ffmpeg（解密第 4 集起的片源必需）。二进制不入库，需先构建再放置：
+ *   npm run setup:ffmpeg:mac
+ *   cp build/ffmpeg/.source-build/artifacts/bin/ffmpeg sidecar/bin/ffmpeg
+ * 该构建的非系统动态依赖为 0，可随 app bundle 分发，不依赖使用者的 Homebrew。
  */
 import http from 'node:http';
 import fs from 'node:fs';
